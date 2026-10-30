@@ -122,3 +122,7 @@ input[type=range] { width: 100%; accent-color: var(--acc); }
 .pulse { --near: 0; width: 120px; height: 120px; border-radius: 50%; border: 3px solid var(--acc); background: rgba(197, 140, 240, calc(var(--near) * .35)); }
 .pulse.on { animation: pop .25s ease-out; }
 @keyframes pop { from { background: var(--acc); transform: scale(1.12); } to { transform: scale(1); } }
+.crow { border-top: 1px solid var(--line); padding: 8px 0 4px; margin-top: 8px; }
+.crow .steps { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 6px; }
+button.pill { border: 0; font-size: .8em; padding: 3px 9px; }
+.card > .ent { display: flex; gap: 12px; align-items: flex-start; }

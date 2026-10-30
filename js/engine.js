@@ -73,7 +73,7 @@ export function newState() {
     enrolled: {}, clubs: {}, done: {}, runs: [], mods: [], puns: [],
     checkin: { day: null, streak: 0 }, chastity: { day: null, streak: 0 },
     inf: { day: null, uses: 0, mood: 0 },
-    day: null, seq: 1, log: [], onboarded: false
+    day: null, seq: 1, log: [], onboarded: false, graduations: []
   };
 }
 
@@ -413,9 +413,38 @@ export const isMember = eid => {
 export const graduated = eid => S.enrolled[eid]?.status === 'done';
 export const attendedToday = eid => (S.enrolled[eid]?.attended || []).includes(dayKey());
 
+// 原站结构：学位 →（先修）课程 →（先修）专家课堂 → 高级 → 中级 → 初级
+// 课堂才看先修；课程、学位随时可加入，先修只挡考试
 export function prereqOk(eid) {
   const e = C.ent[eid];
+  if (e.type !== 'Class') return true;
   return (e.prerequisites || []).every(p => !C.ent[p] || graduated(p));
+}
+// 课程底下的全部课堂（沿先修链往下找），按程度排
+export function courseClasses(cid) {
+  const out = new Set();
+  const walk = id => (C.ent[id]?.prerequisites || []).forEach(p => {
+    if (C.ent[p]?.type === 'Class' && !out.has(p)) { out.add(p); walk(p); }
+  });
+  walk(cid);
+  return [...out].sort((a, b) => (C.ent[a].tier || 0) - (C.ent[b].tier || 0));
+}
+export const degreeCourses = did => (C.ent[did]?.prerequisites || []).filter(p => C.ent[p]?.type === 'Course');
+export const nextClass = cid => entities('Class').find(c => (c.prerequisites || []).includes(cid))?.id || null;
+const activeDegrees = () => Object.keys(S.enrolled).filter(id => C.ent[id]?.type === 'Degree' && isMember(id));
+// 考试门槛：课程要先完成全部课堂且没有惩罚；学位要先完成全部课程
+export function examLock(eid) {
+  const e = C.ent[eid];
+  if (e.type === 'Course') {
+    const miss = courseClasses(eid).filter(c => !graduated(c));
+    if (miss.length) return '先完成全部课堂（还差 ' + miss.length + ' 个程度）';
+    if (S.puns.length) return '先做完惩罚';
+  }
+  if (e.type === 'Degree') {
+    const miss = degreeCourses(eid).filter(c => !graduated(c));
+    if (miss.length) return '先完成全部课程（还差 ' + miss.length + ' 门）';
+  }
+  return '';
 }
 export function tierOk(eid) {
   const e = C.ent[eid];
@@ -432,6 +461,17 @@ export function gradeInfo(eid) {
   return { done, total: ts.length, ratio: r, grade: g };
 }
 
+// 课程／学位成绩（原站 FD）：下层平均 40%＋本层考试 60%，按绩点 A4 B3 C2 D1 F0 折算
+const GP = { A: 4, B: 3, C: 2, D: 1, F: 0 };
+const gpGrade = x => x >= 3.5 ? 'A' : x >= 2.5 ? 'B' : x >= 1.5 ? 'C' : x >= 0.5 ? 'D' : 'F';
+export function finalGrade(eid) {
+  const e = C.ent[eid];
+  if (e.type === 'Class') return gradeInfo(eid).grade;
+  const subs = e.type === 'Course' ? courseClasses(eid) : degreeCourses(eid);
+  const sub = subs.length ? subs.reduce((a, s) => a + GP[finalGrade(s)], 0) / subs.length : 0;
+  return gpGrade(sub * 0.4 + GP[gradeInfo(eid).grade] * 0.6);
+}
+
 export function canGraduate(eid) {
   const e = C.ent[eid];
   if (!isMember(eid)) return false;
@@ -442,7 +482,28 @@ export function canGraduate(eid) {
     const exams = tops.filter(t => t.tier === 2);
     return allDone || (exams.length > 0 && exams.every(t => doneEver(eid + ':' + t.id)));
   }
-  return tops.some(t => doneEver(eid + ':' + t.id));
+  // 课程、学位：考试几选一，做完一个即可
+  return !examLock(eid) && tops.some(t => doneEver(eid + ':' + t.id));
+}
+
+// 最终毕业（原站 /graduation）：没有进行中的学位、课程、课堂、任务、惩罚，且至少完成一个学位
+export function graduationInfo() {
+  const doneDeg = entities('Degree').filter(d => graduated(d.id));
+  const block = [];
+  if (S.puns.length) block.push('还有惩罚');
+  if (activeDegrees().length) block.push('还有学位在读');
+  if (entities('Course').some(c => isMember(c.id))) block.push('还有课程在读');
+  if (entities('Class').some(c => isMember(c.id))) block.push('还有课堂在读');
+  if (S.runs.length) block.push('还有进行中的任务');
+  return { degrees: doneDeg.map(d => d.id), ok: doneDeg.length > 0 && !block.length, block };
+}
+export function graduateUniversity() {
+  const g = graduationInfo();
+  if (!g.ok) return { ok: false, why: g.block.join('、') || '还没完成任何学位' };
+  const rec = { at: Date.now(), degrees: g.degrees.map(id => ({ id, grade: S.enrolled[id]?.grade || finalGrade(id) })) };
+  S.graduations.push(rec);
+  log('毕业：' + rec.degrees.map(d => C.ent[d.id]?.name + ' ' + d.grade).join('、'));
+  return { ok: true, rec };
 }
 
 // ———————————————— 能否开始 ————————————————
@@ -484,6 +545,7 @@ export function check(V, { ignoreConflicts = false, extra = [] } = {}) {
   } else {
     if (!isMember(V.eid)) why.push(graduated(V.eid) ? '已结业' : '未加入');
     else if (e.type === 'Class' && !attendedToday(V.eid)) why.push('今天还没出席');
+    else if (examLock(V.eid)) why.push(examLock(V.eid));
   }
   if (e.type !== 'Punishment' && doneToday(V.key)) why.push('今天已完成');
   if (e.doOnlyOnce && doneEver(V.key)) why.push('只能做一次');
@@ -761,27 +823,65 @@ export function abandonPunishment(pid, noPenalty = false) {
 export function join(eid) {
   const e = C.ent[eid];
   if (e.type === 'Club') { S.clubs[eid] = { at: Date.now(), perks: {} }; log('加入社团：' + e.name); return { ok: true }; }
+  if (isMember(eid) || graduated(eid)) return { ok: false, why: graduated(eid) ? '已结业' : '已加入' };
   if (!tierOk(eid)) return { ok: false, why: '还没解锁' + TIER_LABEL[e.tier] };
-  if (!prereqOk(eid)) return { ok: false, why: '先修未完成' };
-  S.enrolled[eid] = { status: 'active', at: Date.now(), attended: [] };
-  log('加入' + ENT_LABEL[e.type] + '：' + e.name);
+  if (!prereqOk(eid)) return { ok: false, why: '先完成上一个程度' };
+  if (e.type === 'Course' && !activeDegrees().some(d => degreeCourses(d).includes(eid))) return { ok: false, why: '先加入包含这门课程的学位' };
+  enroll(eid);
+  // 原站：加入学位 → 一并加入它的课程；加入课程 → 一并加入还没完成的初级课堂
+  if (e.type === 'Degree') for (const c of degreeCourses(eid)) if (!isMember(c) && !graduated(c)) enroll(c);
+  if (e.type === 'Degree' || e.type === 'Course') autoJoinFirst(e.type === 'Degree' ? degreeCourses(eid) : [eid]);
   return { ok: true };
+}
+function enroll(eid) {
+  S.enrolled[eid] = { status: 'active', at: Date.now(), attended: [] };
+  log('加入' + ENT_LABEL[C.ent[eid].type] + '：' + C.ent[eid].name);
+}
+function autoJoinFirst(courses) {
+  for (const c of courses) {
+    if (!isMember(c)) continue;
+    const first = courseClasses(c).find(k => C.ent[k].tier === 1);
+    if (first && !isMember(first) && !graduated(first)) enroll(first);
+  }
+}
+
+export function leaveCost(eid) {
+  const e = C.ent[eid];
+  if (e.type === 'Class') return R().leaveCost[Math.max(1, e.tier || 1) - 1];
+  if (e.type === 'Degree') return q25(Math.max(0, S.credits) * (R().degreeLeaveRate ?? 0.5));
+  return 0;
 }
 
 export function leave(eid, free = false) {
   const e = C.ent[eid];
-  for (const r of S.runs.filter(r => r.eid === eid)) fail(r.rid, { noPenalty: true, reason: '退出' });
   if (e.type === 'Club') {
+    for (const r of S.runs.filter(r => r.eid === eid)) fail(r.rid, { noPenalty: true, reason: '退出' });
     delete S.clubs[eid];
     log('退出社团：' + e.name);
     return { ok: true };
   }
-  const c = free ? 0 : (e.type === 'Class' ? R().leaveCost[Math.max(1, e.tier || 1) - 1] : 0);
+  const c = free ? 0 : leaveCost(eid);
   if (c > S.credits) return { ok: false, why: '学分不够（要 ' + c + '）' };
   S.credits = q25(S.credits - c);
-  delete S.enrolled[eid];
+  unenroll(eid);
   log('退出' + ENT_LABEL[e.type] + '：' + e.name + (c ? '（扣 ' + c + '）' : ''));
+  // 原站：退学位连带退课程，退课程连带退它的课堂（连带的不另扣）；别的在读学位还要用的课程留着
+  if (e.type === 'Degree') {
+    for (const k of degreeCourses(eid)) {
+      if (!isMember(k) || activeDegrees().some(d => degreeCourses(d).includes(k))) continue;
+      unenroll(k); log('连带退出课程：' + C.ent[k].name);
+      leaveClassesOf(k);
+    }
+  }
+  if (e.type === 'Course') leaveClassesOf(eid);
   return { ok: true };
+}
+function unenroll(eid) {
+  for (const r of S.runs.filter(r => r.eid === eid)) fail(r.rid, { noPenalty: true, reason: '退出' });
+  delete S.enrolled[eid];
+}
+function leaveClassesOf(cid) {
+  for (const k of courseClasses(cid)) if (isMember(k)) { unenroll(k); log('连带退出课堂：' + C.ent[k].name); }
 }
 
 export function canAttend(eid) {
@@ -807,10 +907,10 @@ export function graduate(eid) {
     const mult = R().graduationMult[grade] || 0;
     bonus = q25(va(e.tier) * mult * (1 + checkinPct(S.checkin) / 100));
     S.credits = q25(S.credits + bonus);
-  }
+  } else grade = finalGrade(eid);
   S.enrolled[eid] = { ...S.enrolled[eid], status: 'done', grade, doneAt: Date.now() };
   log('结业：' + e.name + (grade ? '，成绩 ' + grade : '') + (bonus ? '，+' + bonus + ' 学分' : ''));
-  return { ok: true, grade, bonus };
+  return { ok: true, grade, bonus, next: e.type === 'Class' ? nextClass(eid) : null };
 }
 
 export function resetEntity(eid) {

@@ -2,7 +2,7 @@ import * as Vt from './vault.js';
 import * as E from './engine.js';
 import { openGame } from './minigame.js';
 
-const APP_VER = '1.0.0';
+const APP_VER = '1.1.0';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const app = () => $('#app');
@@ -12,6 +12,7 @@ let tab = 'home';
 let more = 'menu';
 let classFilter = 'mine';
 let advFilter = 'mine';
+let showGrad = false;
 let sheets = [];
 let sel = new Map();          // 一起开始：key|vk → view
 let showModMatch = false;
@@ -175,7 +176,7 @@ function viewAsk() {
 
 // ———————————————— 主画面 ————————————————
 
-const TABS = [['home', '首页'], ['class', '课堂'], ['adv', '进阶'], ['pun', '惩罚'], ['more', '更多']];
+const TABS = [['home', '首页'], ['adv', '学位'], ['class', '课堂'], ['pun', '惩罚'], ['more', '更多']];
 
 function viewApp() {
   const pc = E.S.puns.length;
@@ -378,12 +379,65 @@ function viewClasses() {
 }
 
 function viewAdv() {
-  let out = filterChips(advFilter, 'af');
-  for (const type of ['Course', 'Degree']) {
-    const list = filterEnts(E.entities(type), advFilter);
-    out += `<h3>${E.ENT_LABEL[type]}</h3>` + (list.length ? list.map(entCard).join('') : '<p class="muted small">没有</p>');
-  }
+  if (showGrad) return viewGrad();
+  const g = E.graduationInfo();
+  let out = '';
+  if (g.ok) out += `<div class="banner"><b>恭喜，可以毕业了！</b><div class="muted small">已完成 ${g.degrees.length} 个学位。</div><button class="btn primary" data-act="gradUni">毕业</button></div>`;
+  else if (g.degrees.length) out += `<p class="muted small">已完成 ${g.degrees.length} 个学位；要毕业，先清掉：${g.block.join('、')}。</p>`;
+  const last = E.S.graduations.at(-1);
+  if (last) out += `<button class="card menu" data-act="gradShow">🎓 已毕业（${new Date(last.at).toLocaleDateString()}）<span>›</span></button>`;
+  out += filterChips(advFilter, 'af');
+  const list = filterEnts(E.entities('Degree'), advFilter);
+  out += list.length ? list.map(degreeCard).join('') : `<p class="muted">没有。${advFilter === 'mine' ? '点「可加入」挑学位；加入后它的课程和初级课堂会一并加入。' : ''}</p>`;
   return out;
+}
+
+function degreeCard(d) {
+  const joined = E.isMember(d.id), done = E.graduated(d.id);
+  const cs = E.degreeCourses(d.id);
+  const st = done ? `<i class="pill ok">已结业 ${E.S.enrolled[d.id].grade || ''}</i>` : joined ? `<i class="pill act">在读</i>` : '';
+  let body = '';
+  if (joined || done) {
+    const lock = E.examLock(d.id);
+    body = cs.map(courseRow).join('') + `<div class="crow" data-act="ent" data-id="${d.id}"><div class="row between"><b>学位考试</b>${done ? `<i class="pill ok">已完成</i>` : lock ? `<i class="pill">${lock}</i>` : `<i class="pill warn">可考试</i>`}</div></div>`;
+  }
+  return `<div class="card">
+    <div class="ent" data-act="ent" data-id="${d.id}">
+      ${pic(d.id, 'r34 thumb')}
+      <div class="grow">
+        <div class="row between"><b>${esc(d.name)}</b>${st}</div>
+        <div class="muted small">课程 ${cs.filter(E.graduated).length}／${cs.length}</div>
+        ${joined || done ? '' : `<div class="small clamp">${esc(d.description || '')}</div>`}
+      </div>
+    </div>${body}
+  </div>`;
+}
+
+function courseRow(cid) {
+  const c = E.C.ent[cid];
+  const steps = E.courseClasses(cid).map(k => {
+    const t = E.C.ent[k].tier || 0, ok = E.graduated(k);
+    return `<button class="pill ${ok ? 'ok' : E.isMember(k) ? 'act' : ''}" data-act="ent" data-id="${k}">${E.TIER_LABEL[t]}${ok ? ' ' + (E.S.enrolled[k].grade || '✓') : ''}</button>`;
+  }).join('<span class="muted">›</span>');
+  const st = E.graduated(cid) ? `<i class="pill ok">已结业 ${E.S.enrolled[cid].grade || ''}</i>`
+    : !E.isMember(cid) ? `<i class="pill">未加入</i>`
+    : E.examLock(cid) ? `<i class="pill">考试未开</i>` : `<i class="pill warn">可考试</i>`;
+  return `<div class="crow" data-act="ent" data-id="${cid}">
+    <div class="row between"><span>${esc(c.name)}</span>${st}</div>
+    <div class="row steps">${steps}<span class="muted">›</span><i class="pill ${E.graduated(cid) ? 'ok' : ''}">考试</i></div>
+  </div>`;
+}
+
+function viewGrad() {
+  const g = E.S.graduations.at(-1);
+  if (!g) { showGrad = false; return viewAdv(); }
+  return `<button class="btn ghost small" data-act="gradClose">‹ 返回</button>
+    <div class="center-t"><div style="font-size:3em">🎓</div>
+    <h2>恭喜，${esc(E.S.settings.ph.PLAYER_ROLE || '')}毕业了！</h2>
+    <p class="muted small">${new Date(g.at).toLocaleString()}</p></div>
+    <p>你修完了这些学位：</p>
+    ${g.degrees.map(d => `<div class="row between card"><span>${esc(E.C.ent[d.id]?.name || d.id)}</span><i class="pill ok">${d.grade}</i></div>`).join('')}
+    <p class="muted small">学位成绩＝课程成绩平均 40%＋学位考试 60%；课程成绩＝四个程度平均 40%＋课程考试 60%。</p>`;
 }
 
 // —— 惩罚 ——
@@ -545,23 +599,34 @@ function viewEnt(id) {
   else if (E.isMember(id)) {
     if (e.type === 'Class') btns.push(E.canAttend(id) ? `<button class="btn primary" data-act="attend" data-id="${id}">出席</button>` : `<span class="pill ok">${E.attendedToday(id) ? '今天已出席' : '今天不排课'}</span>`);
     if (E.canGraduate(id)) btns.push(`<button class="btn primary" data-act="graduate" data-id="${id}">结业</button>`);
-    btns.push(`<button class="btn ghost" data-act="leave" data-id="${id}">退出${e.type === 'Class' ? '（扣 ' + E.C.rules.leaveCost[Math.max(1, e.tier || 1) - 1] + '）' : ''}</button>`);
+    const lc = E.leaveCost(id);
+    btns.push(`<button class="btn ghost" data-act="leave" data-id="${id}">退出${lc ? '（扣 ' + lc + '）' : ''}</button>`);
     btns.push(`<button class="btn ghost" data-act="resetEnt" data-id="${id}">重置今天</button>`);
   } else if (E.graduated(id)) {
     btns.push(`<span class="pill ok">已结业 ${S.enrolled[id].grade || ''}</span>`);
   } else {
-    const ok = E.tierOk(id) && E.prereqOk(id);
+    const inDeg = e.type !== 'Course' || E.entities('Degree').some(d => E.isMember(d.id) && E.degreeCourses(d.id).includes(id));
+    const ok = E.tierOk(id) && E.prereqOk(id) && inDeg;
     btns.push(`<button class="btn primary" data-act="join" data-id="${id}" ${ok ? '' : 'disabled'}>加入</button>`);
     if (!E.tierOk(id)) btns.push(`<span class="muted small">要先解锁${E.TIER_LABEL[e.tier]}</span>`);
+    else if (!E.prereqOk(id)) btns.push(`<span class="muted small">先完成上一个程度</span>`);
+    else if (!inDeg) btns.push(`<span class="muted small">先加入包含这门课程的学位</span>`);
   }
-  const pre = (e.prerequisites || []).filter(p => E.C.ent[p]);
+  let pre = (e.prerequisites || []).filter(p => E.C.ent[p]);
   let info = '';
   if (e.type === 'Class') {
     const g = E.gradeInfo(id);
     info = `<div class="muted small">${E.TIER_LABEL[e.tier || 0]}｜每任务基础 ${E.va(e.tier)} 学分｜考试 ×${E.C.rules.examMult}${e.days?.length ? '｜排在周' + e.days.map(d => E.WEEK[d]).join('、') : ''}</div>
       ${E.isMember(id) ? `<div class="muted small">进度 ${g.done}／${g.total}，目前成绩 ${g.grade}。全部做完＝A；或做完考试即可结业。</div>` : ''}`;
   }
-  if (e.type === 'Course' || e.type === 'Degree') info = `<div class="muted small">开始任务要付 ${E.startCost({ entType: e.type })} 学分；做完任一主任务即可结业。</div>`;
+  if (e.type === 'Course' || e.type === 'Degree') {
+    const lock = E.isMember(id) ? E.examLock(id) : '';
+    info = `<div class="muted small">${e.type === 'Course' ? '四个程度都完成、没有惩罚，才能考课程考试' : '全部课程完成，才能考学位考试'}；考试几选一，做完一个即可结业。开始考试要付 ${E.startCost({ entType: e.type })} 学分。</div>
+      ${lock ? `<div class="notice">${lock}</div>` : ''}
+      ${E.isMember(id) || E.graduated(id) ? `<div class="muted small">目前成绩 ${E.graduated(id) ? S.enrolled[id].grade : E.finalGrade(id)}（下层平均 40%＋考试 60%）</div>` : ''}`;
+    pre = e.type === 'Course' ? E.courseClasses(id) : E.degreeCourses(id);
+  }
+  if (e.type === 'Class' && E.nextClass(id)) info += `<div class="muted small">下一程度：${esc(E.C.ent[E.nextClass(id)].name)}</div>`;
   const tops = E.topTasks(id);
   const tasks = tops.map(t => {
     const v = E.view(id, t.id);
@@ -577,7 +642,7 @@ function viewEnt(id) {
       <div class="muted small">${E.ENT_LABEL[e.type]}${(e.tags || []).length ? '｜' + e.tags.map(t => esc(E.C.tags[t] || t)).join('、') : ''}</div>
       ${info}</div></div>
     <p>${esc(e.description || '')}</p>
-    ${pre.length ? `<div class="small">先修：${pre.map(p => `<span class="pill ${E.graduated(p) ? 'ok' : ''}">${esc(E.C.ent[p].name)}</span>`).join(' ')}</div>` : ''}
+    ${pre.length ? `<div class="small">${e.type === 'Class' ? '先修' : e.type === 'Course' ? '课堂' : '课程'}：${pre.map(p => `<button class="pill ${E.graduated(p) ? 'ok' : E.isMember(p) ? 'act' : ''}" data-act="ent" data-id="${p}">${esc(E.C.ent[p].name)}${E.C.ent[p].type === 'Class' ? '（' + E.TIER_LABEL[E.C.ent[p].tier || 0] + '）' : ''}</button>`).join(' ')}</div>` : ''}
     <div class="row gap wrap">${btns.join('')}</div>
     <h3>任务</h3>${tasks || '<p class="muted">没有任务</p>'}`;
 }
@@ -705,13 +770,20 @@ const ACT = {
   checkin(d) { E.checkin(d.k === 'chastity' ? 'chastity' : 'normal'); refresh(); },
   attend(d) { E.attend(d.id); toast('已出席：' + E.C.ent[d.id].name); refresh(); },
   async join(d) {
+    const e = E.C.ent[d.id];
+    if (e.type === 'Degree') {
+      const cs = E.degreeCourses(d.id).filter(c => !E.graduated(c) && !E.isMember(c));
+      if (!(await confirmBox(`加入「${esc(e.name)}」？会一并加入 ${cs.length} 门课程和它们的初级课堂。`, '加入'))) return;
+    }
     const r = E.join(d.id);
     if (!r.ok) toast(r.why); else toast('已加入');
     refresh();
   },
   async leave(d) {
     const e = E.C.ent[d.id];
-    if (!(await confirmBox(`退出「${esc(e.name)}」？进行中的任务会取消（不罚）。`, '退出', 'danger'))) return;
+    const lc = E.leaveCost(d.id);
+    const also = e.type === 'Degree' ? '它的课程和课堂也会一并退出（别的在读学位还要用的课程保留）。' : e.type === 'Course' ? '它底下在读的课堂也会一并退出。' : '';
+    if (!(await confirmBox(`退出「${esc(e.name)}」？${also}进行中的任务会取消（不罚）。${lc ? `<br><b>扣 ${lc} 学分</b>${e.type === 'Degree' ? '（现有学分的一半）' : ''}。` : ''}`, '退出', 'danger'))) return;
     const r = E.leave(d.id);
     if (!r.ok) toast(r.why);
     refresh();
@@ -720,7 +792,20 @@ const ACT = {
     const r = E.graduate(d.id);
     if (r.ok) toast('结业' + (r.grade ? '，成绩 ' + r.grade : '') + (r.bonus ? '，+' + r.bonus + ' 学分' : ''));
     refresh();
+    const nx = r.next && E.C.ent[r.next];
+    if (nx && !E.isMember(nx.id) && !E.graduated(nx.id)) {
+      if (!E.tierOk(nx.id)) toast(`下一程度「${nx.name}」要先解锁${E.TIER_LABEL[nx.tier]}课堂`, 4000);
+      else if (await confirmBox(`接着加入下一程度「${esc(nx.name)}」？`, '加入')) { E.join(nx.id); toast('已加入'); refresh(); }
+    } else if (r.ok && E.graduationInfo().ok) toast('全部学位完成了，到「学位」页毕业', 4000);
   },
+  async gradUni() {
+    if (!(await confirmBox('毕业？成绩会记下来；之后还可以再读新的学位。', '毕业'))) return;
+    const r = E.graduateUniversity();
+    if (!r.ok) { toast(r.why); return; }
+    showGrad = true; refresh();
+  },
+  gradShow() { showGrad = true; render(); },
+  gradClose() { showGrad = false; render(); },
   async resetEnt(d) {
     if (!(await confirmBox('清掉这门今天的进行中任务与出席（不罚），累计完成次数保留。用于卡住时。', '重置'))) return;
     E.resetEntity(d.id); refresh();
