@@ -67,7 +67,7 @@ export function newState() {
     settings: {
       ph: {}, mode: 'replica', progressive: true, manual: 1.0, schedule: 'free', rollcallExempt: false,
       timer: true, autoComplete: false, pauseLimit: false, dayStartHour: 0, lockMin: 5, strictItems: true,
-      onlyDoable: false, sound: true, vibrate: true, preferVariant: 'default_variant', wakeLock: true
+      onlyDoable: false, sound: true, vibrate: true, preferVariant: 'default_variant', wakeLock: true, affLang: 'zh'
     },
     credits: 0, tier: 1, owned: {}, wearing: {},
     enrolled: {}, clubs: {}, done: {}, runs: [], mods: [], puns: [],
@@ -661,8 +661,10 @@ function gameConfig(V, R0) {
     return { kind: 'beattrack', beats: V.beat?.beats || [], intro: (V.beat?.initialDialog || []).map(d => ({ message: d.message, ms: d.duration || 4000 })) };
   }
   if (V.type === 'AFFIRMATIONS_TASK') {
-    const n = (V.aff?.entries || []).reduce((a, e) => a + (e.repetitions || 0), 0) || 5;
-    return { kind: 'count', label: '大声念一句自我暗示语', total: Math.min(50, Math.max(1, V.aff?.isAffectedByDifficulty ? Math.round(n * m) : n)) };
+    const es = V.aff?.entries || [];
+    const n = es.reduce((a, e) => a + (e.repetitions || 0), 0) || 5;
+    const tags = [...new Set(es.flatMap(e => e.tags || []))];
+    return { kind: 'affirm', tags: tags.length ? tags : ['ANY'], total: Math.min(50, Math.max(1, V.aff?.isAffectedByDifficulty ? Math.round(n * m) : n)) };
   }
   if (V.type === 'OBEDIENCE_MINIGAME_TASK') {
     const n = Math.max(1, Math.round(R0.P.commands?.num || 5));
@@ -824,7 +826,7 @@ export function join(eid) {
   const e = C.ent[eid];
   if (e.type === 'Club') { S.clubs[eid] = { at: Date.now(), perks: {} }; log('加入社团：' + e.name); return { ok: true }; }
   if (isMember(eid) || graduated(eid)) return { ok: false, why: graduated(eid) ? '已结业' : '已加入' };
-  if (!tierOk(eid)) return { ok: false, why: '还没解锁' + TIER_LABEL[e.tier] };
+  if (!tierOk(eid)) return { ok: false, why: '还没解锁' + TIER_LABEL[e.tier] + '：到「课堂」页最上面，花 ' + R().tierUnlockCost[e.tier] + ' 学分' };
   if (!prereqOk(eid)) return { ok: false, why: '先完成上一个程度' };
   if (e.type === 'Course' && !activeDegrees().some(d => degreeCourses(d).includes(eid))) return { ok: false, why: '先加入包含这门课程的学位' };
   enroll(eid);

@@ -2,7 +2,7 @@ import * as Vt from './vault.js';
 import * as E from './engine.js';
 import { openGame } from './minigame.js';
 
-const APP_VER = '1.1.3';
+const APP_VER = '1.1.4';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const app = () => $('#app');
@@ -21,6 +21,9 @@ let hiddenAt = 0;
 let saveTimer = null;
 let imgIdx = {};
 const imgUrls = new Map();
+let audIdx = {};               // 暗示语配音：aff_zh_<id>／aff_en_<id> → MIME
+const audUrls = new Map();
+let voiceEl = null, voiceSeq = 0;
 let gameStop = null;
 let wake = null;
 let scrollMem = {};
@@ -62,6 +65,7 @@ function save(now = false) {
 async function loadAll() {
   const content = await Vt.getJSON('content');
   imgIdx = (await Vt.getJSON('imgidx')) || {};
+  audIdx = (await Vt.getJSON('audidx')) || {};
   E.useState(await Vt.getJSON('state'));
   E.hooks({ notify });
   if (!content) { screen = 'import'; return; }
@@ -153,7 +157,39 @@ async function hydrateImages(root = document) {
     n.innerHTML = `<img src="${url}" alt="">`;
   }
 }
-function dropImageUrls() { for (const u of imgUrls.values()) URL.revokeObjectURL(u); imgUrls.clear(); }
+function dropImageUrls() {
+  stopVoice();
+  for (const u of [...imgUrls.values(), ...audUrls.values()]) URL.revokeObjectURL(u);
+  imgUrls.clear(); audUrls.clear();
+}
+
+// 播一段配音，播完回 true；没有这段或被打断回 false
+async function playVoice(key) {
+  stopVoice();
+  const my = voiceSeq;
+  if (!audIdx[key]) return false;
+  let url = audUrls.get(key);
+  if (!url) {
+    try {
+      const b = await Vt.getBytes('aud:' + key);
+      if (!b) return false;
+      url = URL.createObjectURL(new Blob([b], { type: audIdx[key] }));
+      audUrls.set(key, url);
+    } catch { return false; }
+  }
+  if (my !== voiceSeq) return false;
+  const a = voiceEl = new Audio(url);
+  return new Promise(res => {
+    a.onended = () => res(true);
+    a.onerror = () => res(false);
+    a._res = res;
+    a.play().catch(() => res(false));
+  });
+}
+function stopVoice() {
+  voiceSeq++;
+  if (voiceEl) { voiceEl.pause(); voiceEl._res?.(false); voiceEl = null; }
+}
 
 // ———————————————— 画面：锁定／设定／导入 ————————————————
 
@@ -641,6 +677,7 @@ function viewSettings() {
     ${tg('autoComplete', '时间到自动完成')}
     ${tg('pauseLimit', '暂停超过 2 小时算失败')}
     ${selx('dayStartHour', '换日时间', [0, 1, 2, 3, 4, 5, 6].map(h => [h, h + ':00']))}
+    ${selx('affLang', '暗示语先用哪种语言', [['zh', '中文'], ['en', 'English']])}
     ${tg('sound', '提示音')}${tg('vibrate', '震动')}${tg('wakeLock', '小游戏时屏幕常亮')}
     <button class="btn wide" data-act="notifPerm">开启系统通知（内容只写“计时到了”）</button>
     <p class="muted small">App 被系统关掉时不会提醒；回到 App 会自动补算。</p>
@@ -666,6 +703,7 @@ function viewData() {
     <p class="muted small" id="impmsg"></p>
     <h3>图片</h3>
     <p>已存 ${n} 张（加密存在 App 里，相册与文件搜索看不到）。</p>
+    <p class="muted small">暗示语配音 ${Object.keys(audIdx).length} 段。</p>
     ${n ? `<button class="btn wide ghost" data-act="clearImgs">删除全部图片</button>` : ''}`;
 }
 
@@ -689,7 +727,7 @@ function viewEnt(id) {
     const inDeg = e.type !== 'Course' || E.entities('Degree').some(d => E.isMember(d.id) && E.degreeCourses(d.id).includes(id));
     const ok = E.tierOk(id) && E.prereqOk(id) && inDeg;
     btns.push(`<button class="btn primary" data-act="join" data-id="${id}" ${ok ? '' : 'disabled'}>加入</button>`);
-    if (!E.tierOk(id)) btns.push(`<span class="muted small">要先解锁${E.TIER_LABEL[e.tier]}</span>`);
+    if (!E.tierOk(id)) btns.push(`<span class="muted small">要先解锁${E.TIER_LABEL[e.tier]}：到「课堂」页最上面，花 ${E.C.rules.tierUnlockCost[e.tier]} 学分</span>`);
     else if (!E.prereqOk(id)) btns.push(`<span class="muted small">先完成上一个程度</span>`);
     else if (!inDeg) btns.push(`<span class="muted small">先加入包含这门课程的学位</span>`);
   }
@@ -782,6 +820,11 @@ async function showGame(rid) {
   if (E.S.settings.wakeLock && navigator.wakeLock) { try { wake = await navigator.wakeLock.request('screen'); } catch {} }
   gameStop = openGame(r.game, g, {
     sound: E.S.settings.sound, vibrate: E.S.settings.vibrate, commands: E.C.commands,
+    affirm: {
+      lines: E.C.affirmations || [], lang: E.S.settings.affLang,
+      setLang: l => { E.S.settings.affLang = l; save(); },
+      voice: (id, l) => playVoice(`aff_${l}_${id}`), stop: stopVoice
+    },
     onDone: () => {
       r.gameDone = true;
       closeGame(true);
@@ -878,7 +921,7 @@ const ACT = {
     refresh();
     const nx = r.next && E.C.ent[r.next];
     if (nx && !E.isMember(nx.id) && !E.graduated(nx.id)) {
-      if (!E.tierOk(nx.id)) toast(`下一程度「${nx.name}」要先解锁${E.TIER_LABEL[nx.tier]}课堂`, 4000);
+      if (!E.tierOk(nx.id)) toast(`下一程度「${nx.name}」要先解锁${E.TIER_LABEL[nx.tier]}：到「课堂」页最上面，花 ${E.C.rules.tierUnlockCost[nx.tier]} 学分`, 5000);
       else if (await confirmBox(`接着加入下一程度「${esc(nx.name)}」？`, '加入')) { E.join(nx.id); toast('已加入'); refresh(); }
     } else if (r.ok && E.graduationInfo().ok) toast('全部学位完成了，到「学位」页毕业', 4000);
   },
@@ -1037,15 +1080,21 @@ async function importFile(file) {
       await Vt.putJSON('content', h.data);
       E.loadContent(h.data);
     }
-    let n = 0;
+    let n = 0, ni = 0, na = 0;
     for (const f of res.files) {
-      msg(`存图片 ${++n}／${res.files.length}…`);
-      await Vt.putBytes('img:' + f.name, f.bytes);
-      imgIdx[f.name] = f.type;
+      msg(`存图片／语音 ${++n}／${res.files.length}…`);
+      if (f.type.startsWith('audio/')) {
+        await Vt.putBytes('aud:' + f.name, f.bytes);
+        audIdx[f.name] = f.type; na++;
+      } else {
+        await Vt.putBytes('img:' + f.name, f.bytes);
+        imgIdx[f.name] = f.type; ni++;
+      }
     }
     await Vt.putJSON('imgidx', imgIdx);
+    if (na) await Vt.putJSON('audidx', audIdx);
     dropImageUrls();
-    toast(h.kind === 'pack' ? `内容包已导入（${h.data.entities.length} 项，图片 ${res.files.length} 张）` : `图片已导入 ${res.files.length} 张`);
+    toast(h.kind === 'pack' ? `内容包已导入（${h.data.entities.length} 项，图片 ${ni} 张，语音 ${na} 段）` : `图片已导入 ${ni} 张`);
   } else { msg('不认识的文件'); return; }
   msg('');
   if (screen === 'import') {

@@ -1,4 +1,4 @@
-// 小游戏：节拍器、节拍轨、服从口令、计数。全部在本机跑，不放音频档，只用合成的“嗒”声。
+// 小游戏：节拍器、节拍轨、服从口令、自我暗示语、计数。全部在本机跑；“嗒”声是合成的，暗示语配音从内容包来。
 
 let ac = null;
 function click(hi = false, on = true) {
@@ -23,7 +23,7 @@ export function openGame(cfg, root, opts) {
   const timers = [];
   const later = (fn, ms) => { const t = setTimeout(fn, ms); timers.push(t); return t; };
   const every = (fn, ms) => { const t = setInterval(fn, ms); timers.push(t); return t; };
-  const stopAll = () => { timers.forEach(t => { clearTimeout(t); clearInterval(t); }); timers.length = 0; };
+  const stopAll = () => { timers.forEach(t => { clearTimeout(t); clearInterval(t); }); timers.length = 0; opts.affirm?.stop?.(); };
   const finish = () => { stopAll(); opts.onDone(); };
   const head = el('div', 'game-head');
   const big = el('div', 'game-big');
@@ -138,6 +138,85 @@ export function openGame(cfg, root, opts) {
     };
     head.textContent = '服从口令'; big.textContent = cfg.total + ' 道'; sub.textContent = '每道口令照做并保持到倒数结束';
     button('开始', next, 'primary');
+  }
+
+  else if (cfg.kind === 'affirm') {
+    // 原站：先倒数 3 秒，一次一句，每次换一句（不连着重复），按长短给念的时间后自动换
+    const A = opts.affirm || {};
+    const all = A.lines || [];
+    const tags = cfg.tags || ['ANY'];
+    let pool = tags.includes('ANY') ? all : all.filter(a => (a.tags || []).some(t => tags.includes(t)));
+    if (!pool.length) pool = all.length ? all : [{ id: '', zh: '我是乖女孩', en: 'I am a good girl' }];
+    let lang = A.lang === 'en' ? 'en' : 'zh';
+    let n = 0, cur = null, token = 0, paused = false;
+    const bar = el('div', 'aff-bar'), fill = el('i');
+    bar.appendChild(fill);
+    box.insertBefore(bar, btns);
+    pulse.remove();
+    const langBtn = el('button', 'btn ghost aff-lang');
+    box.appendChild(langBtn);
+    const readSec = (t, l) => {
+      const k = l === 'en' ? t.split(/\s+/).filter(Boolean).length * 0.4 : t.replace(/[\s，、。：；！？「」,.]/g, '').length * 0.28;
+      return Math.min(12, Math.max(2.5, k + 1.5));
+    };
+    const paint = () => {
+      langBtn.textContent = lang === 'zh' ? '中文 ⇄ EN' : 'EN ⇄ 中文';
+      if (!cur) return;
+      big.textContent = cur[lang];
+      sub.textContent = cur[lang === 'zh' ? 'en' : 'zh'];
+    };
+    const say = async () => {
+      const my = ++token;
+      stopAll();
+      paint();
+      fill.style.width = '0%';
+      if (A.voice) await A.voice(cur.id, lang);
+      if (my !== token || paused) return;
+      const ms = readSec(cur[lang], lang) * 1000, t0 = Date.now();
+      every(() => {
+        const f = (Date.now() - t0) / ms;
+        fill.style.width = Math.min(100, f * 100) + '%';
+        if (f >= 1) next();
+      }, 100);
+    };
+    const next = () => {
+      token++; stopAll();
+      if (n >= cfg.total) {
+        clearBtns(); bar.remove(); langBtn.remove();
+        head.textContent = '全部完成'; big.textContent = '✓'; sub.textContent = '';
+        button('结算', finish, 'primary');
+        return;
+      }
+      let c;
+      do c = pool[Math.floor(Math.random() * pool.length)]; while (pool.length > 1 && c === cur);
+      cur = c; n++;
+      head.textContent = `第 ${n}／${cfg.total} 句`;
+      say();
+    };
+    langBtn.onclick = () => {
+      lang = lang === 'zh' ? 'en' : 'zh';
+      A.setLang?.(lang);
+      if (cur && !paused) say(); else paint();
+    };
+    const go = () => {
+      clearBtns();
+      let left = 3;
+      big.textContent = left; sub.textContent = '听完跟着大声念出来';
+      every(() => { left--; if (left > 0) big.textContent = left; else next(); }, 1000);
+      button('念完了，下一句', () => { if (cur) next(); }, 'primary');
+      button('再听一次', () => { if (cur) { paused = false; pb.textContent = '暂停'; say(); } });
+      const pb = button('暂停', () => {
+        if (!cur) return;
+        paused = !paused;
+        pb.textContent = paused ? '继续' : '暂停';
+        if (paused) { token++; stopAll(); sub.textContent = '暂停中'; } else say();
+      });
+    };
+    head.textContent = '自我暗示语';
+    big.textContent = cfg.total + ' 句';
+    sub.textContent = '每句先听，再跟着大声念出来；左上角可切换中文／英文';
+    paint();
+    button('开始', go, 'primary');
   }
 
   else {
