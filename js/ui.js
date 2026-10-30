@@ -2,7 +2,7 @@ import * as Vt from './vault.js';
 import * as E from './engine.js';
 import { openGame } from './minigame.js';
 
-const APP_VER = '1.1.0';
+const APP_VER = '1.1.3';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const app = () => $('#app');
@@ -13,6 +13,7 @@ let more = 'menu';
 let classFilter = 'mine';
 let advFilter = 'mine';
 let showGrad = false;
+let openKids = new Set();     // 展开的细则
 let sheets = [];
 let sel = new Map();          // 一起开始：key|vk → view
 let showModMatch = false;
@@ -23,6 +24,30 @@ const imgUrls = new Map();
 let gameStop = null;
 let wake = null;
 let scrollMem = {};
+
+// ———————————————— 更新 ————————————————
+
+let updReady = false;         // 新版程序已下载，重新载入就生效
+
+async function checkUpdate() {
+  let ver = '';
+  try { ver = (await (await fetch('sw.js?t=' + Date.now(), { cache: 'no-store' })).text()).match(/pb-([\d.]+)/)?.[1] || ''; } catch {}
+  if (!ver) return toast('连不上网，没法检查');
+  if (ver === APP_VER && !updReady) return toast('已经是最新版 ' + APP_VER);
+  applyUpdate(ver);
+}
+
+async function applyUpdate(ver = '') {
+  toast('正在更新' + (ver ? '到 ' + ver : '') + '…', 6000);
+  await save(true);
+  const reg = await navigator.serviceWorker?.getRegistration();
+  if (!reg) return location.reload();
+  navigator.serviceWorker.addEventListener('controllerchange', () => location.reload(), { once: true });
+  try { await reg.update(); } catch {}
+  // 新程序在装：等它接管再重载；已装好（或没变）就直接重载
+  if (reg.installing || reg.waiting) setTimeout(() => location.reload(), 10000);
+  else location.reload();
+}
 
 // ———————————————— 存取 ————————————————
 
@@ -200,6 +225,7 @@ function viewApp() {
 function viewHome() {
   const S = E.S;
   let out = '';
+  if (updReady) out += `<div class="notice" data-act="applyUpd">新版程序已下载，点这里更新（要再输入 PIN）→</div>`;
   const ci = S.checkin.day === E.dayKey(), cc = S.chastity.day === E.dayKey();
   out += `<div class="row gap">
     <button class="btn ${ci ? 'ghost' : ''}" data-act="checkin" data-k="normal" ${ci ? 'disabled' : ''}>${ci ? '已签到' : '签到'}｜${E.checkinStreak('normal')}%</button>
@@ -248,16 +274,11 @@ function selConflicts(v) {
 
 // —— 任务卡 ——
 
-function taskCard(v, o = {}) {
-  const R = E.renderView(v);
-  const chk = E.check(v);
-  const run = E.runOf(v.key);
+// 标签、需要的道具、时长学分等，任务卡和进行中卡的「任务细则」共用
+function taskBits(v, R) {
   const cr = E.creditsFor(v).final;
   const cost = E.startCost(v);
   const d = E.S.done[v.key];
-  const selKey = v.key + '|' + v.vk;
-  const selOn = sel.has(selKey);
-  const selBlock = o.selectable && !selOn && sel.size ? selConflicts(v) : [];
   const tags = [];
   if (v.isExam) tags.push('<i class="pill warn">考试</i>');
   tags.push(`<i class="pill">${E.TYPE_LABEL[v.type] || v.type}</i>`);
@@ -274,8 +295,35 @@ function taskCard(v, o = {}) {
   const rs = v.requiredStats;
   if (rs && !Array.isArray(rs)) for (const [k, n] of Object.entries(rs)) reqs.push((E.C.stats[k] || k) + ' ≥ ' + n);
   if (Array.isArray(rs)) for (const r of rs) if (r.anyStatMin) reqs.push('任一服装数值 ≥ ' + r.anyStatMin);
+  return { tags, meta, reqs };
+}
+
+// 实体小标：小图＋名称＋所属课程／学位，点了开详情
+function entTag(eid, extra = '') {
+  const e = E.C.ent[eid];
+  if (!e) return `<div class="muted small">${esc(eid)}${extra}</div>`;
+  let sub = E.ENT_LABEL[e.type] || '';
+  if (e.type === 'Class') { const c = ownerOf(eid, 'Course'); sub = E.TIER_LABEL[e.tier || 0] + (c ? '・' + c.name : ''); }
+  else if (e.type === 'Course') { const g = ownerOf(eid, 'Degree'); if (g) sub += '・' + g.name; }
+  return `<div class="etag" data-act="ent" data-id="${eid}">${pic(eid, 'r34 mini')}<div class="grow"><b>${esc(e.name)}</b><div class="muted small">${esc(sub)}${extra}</div></div><span class="muted">›</span></div>`;
+}
+
+function ownerOf(id, type) {
+  const f = type === 'Course' ? E.courseClasses : E.degreeCourses;
+  const all = E.entities(type).filter(x => f(x.id).includes(id));
+  return all.find(x => E.isMember(x.id)) || all[0];
+}
+
+function taskCard(v, o = {}) {
+  const R = E.renderView(v);
+  const chk = E.check(v);
+  const run = E.runOf(v.key);
+  const selKey = v.key + '|' + v.vk;
+  const selOn = sel.has(selKey);
+  const selBlock = o.selectable && !selOn && sel.size ? selConflicts(v) : [];
+  const { tags, meta, reqs } = taskBits(v, R);
   const mm = !run && chk.ok ? E.matchingMods(v) : [];
-  const head = o.showEnt !== false && o.compact ? `<div class="muted small">${esc(v.e.name)}${v.entType === 'Class' ? '' : '・' + E.ENT_LABEL[v.entType]}</div>` : '';
+  const head = o.showEnt !== false && o.compact ? entTag(v.eid) : '';
   let btn = '';
   if (chk.unsupported) btn = `<span class="muted small">此版本不支持</span>${!E.doneToday(v.key) && E.isMember(v.eid) ? ` <button class="btn small ghost" data-act="skipU" data-e="${v.eid}" data-t="${v.tid}">跳过</button>` : ''}`;
   else if (run) btn = `<span class="pill act">进行中</span>`;
@@ -299,6 +347,11 @@ function taskCard(v, o = {}) {
   </div>`;
 }
 
+function fold(key, label, inner) {
+  const on = openKids.has(key);
+  return `<button class="fold" data-act="fold" data-k="${esc(key)}">${on ? '▾' : '▸'} ${label}</button>${on ? inner() : ''}`;
+}
+
 // —— 进行中卡 ——
 
 function runCard(r) {
@@ -313,13 +366,20 @@ function runCard(r) {
   else if (r.type !== 'MODIFIER_TASK') timer = `<div class="timer soft" data-elapsed="${r.rid}">${E.fmtClock(E.elapsed(r))}</div>`;
   let kids = '';
   if (r.type === 'COMPOSITE_TASK' && V) {
-    kids = `<div class="kids">${E.childTasks(r.eid, r.tid).map(k => {
-      const kv = E.view(r.eid, k.id);
-      const kr = E.runOf(kv.key);
-      if ((r.kidsDone || []).includes(k.id)) return `<div class="kid done">✓ ${E.stripTags(E.renderView(kv).text).slice(0, 40)}</div>`;
-      if (kr) return runCard(kr);
-      return taskCard(kv, { compact: false, showEnt: false });
-    }).join('')}</div>`;
+    // 细则多时只摊开眼前要做的：进行中的＋下一步（按顺序）或前两项；做完的、后面的收起来
+    const all = E.childTasks(r.eid, r.tid).map(k => ({ k, kv: E.view(r.eid, k.id) }));
+    const done = all.filter(x => (r.kidsDone || []).includes(x.k.id));
+    const todo = all.filter(x => !done.includes(x));
+    const running = todo.filter(x => E.runOf(x.kv.key));
+    const rest = todo.filter(x => !running.includes(x));
+    const front = running.concat(r.sequential ? (running.length ? [] : rest.slice(0, 1)) : rest.slice(0, Math.max(0, 2 - running.length)));
+    const later = rest.filter(x => !front.includes(x));
+    const card = x => E.runOf(x.kv.key) ? runCard(E.runOf(x.kv.key)) : taskCard(x.kv, { compact: false, showEnt: false });
+    kids = `<div class="kids">
+      ${done.length ? fold('d' + r.rid, `已完成 ${done.length}／${all.length} 步`, () => done.map(x => `<div class="kid done">✓ ${E.stripTags(E.renderView(x.kv).text).slice(0, 40)}</div>`).join('')) : ''}
+      ${front.map(card).join('')}
+      ${later.length ? fold('l' + r.rid, `${r.sequential ? '后面' : '其余'}还有 ${later.length} 项`, () => later.map(card).join('')) : ''}
+    </div>`;
     if (r.stepWindow && (r.kidsDone || []).length) {
       const left = r.stepWindow - (Date.now() - r.lastStepAt) / 1000;
       if (!E.S.runs.some(k => k.parentRid === r.rid)) kids = `<div class="why">下一步要在 ${E.fmtClock(left)} 内开始</div>` + kids;
@@ -330,16 +390,31 @@ function runCard(r) {
   if (f.ok) btns.push(`<button class="btn primary" data-act="done" data-r="${r.rid}">完成</button>`);
   if (r.type === 'DURATION_TASK' || r.type === 'COMPOSITE_TASK') btns.push(r.pausedAt ? `<button class="btn" data-act="resume" data-r="${r.rid}">继续</button>` : `<button class="btn ghost" data-act="pause" data-r="${r.rid}">暂停</button>`);
   btns.push(`<button class="btn ghost" data-act="runMenu" data-r="${r.rid}">⋯</button>`);
+  const extra = `${r.isExam ? '・考试' : ''}・${E.TYPE_LABEL[r.type] || ''}${r.pausedAt ? '・暂停中' : ''}`;
   return `<div class="card run ${r.pausedAt ? 'paused' : ''}">
-    <div class="muted small">${esc(E.C.ent[r.eid]?.name || r.eid)}${r.isExam ? '・考试' : ''}・${E.TYPE_LABEL[r.type] || ''}${r.pausedAt ? '・暂停中' : ''}</div>
-    ${r.title ? `<div class="ttl">${r.title}</div>` : ''}
-    <div class="txt">${r.text}</div>
+    ${r.parentRid ? `<div class="muted small">${esc(E.C.ent[r.eid]?.name || r.eid)}${extra}</div>` : entTag(r.eid, extra)}
+    <div class="tap" data-act="fold" data-k="i${r.rid}">
+      ${r.title ? `<div class="ttl">${r.title}</div>` : ''}
+      <div class="txt">${r.text}</div>
+    </div>
+    ${V ? fold('i' + r.rid, '任务细则', () => runInfo(r, V)) : ''}
     ${mods.length ? `<div class="hint">一并执行：${mods.map(m => m.text).join('；')}</div>` : ''}
     ${own.length ? `<div class="hint alt">等下一个任务配合：${own.map(m => m.text).join('；')}</div>` : ''}
     ${timer}
     ${!f.ok && r.type !== 'MODIFIER_TASK' && r.type !== 'COMPOSITE_TASK' && !(r.game && !r.gameDone) ? `<div class="muted small">${f.why}</div>` : ''}
     <div class="row gap wrap">${btns.join('')}</div>
     ${kids}
+  </div>`;
+}
+
+function runInfo(r, V) {
+  const { tags, meta, reqs } = taskBits(V, E.renderView(V));
+  meta.push('开始于 ' + new Date(r.startedAt).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }));
+  return `<div class="info">
+    <div class="tags">${tags.join('')}</div>
+    ${r.comment ? `<div class="muted small">${r.comment}</div>` : ''}
+    ${reqs.length ? `<div class="req">需要：${reqs.map(esc).join('；')}</div>` : ''}
+    <div class="muted small">${meta.join('｜')}</div>
   </div>`;
 }
 
@@ -423,7 +498,10 @@ function courseRow(cid) {
     : !E.isMember(cid) ? `<i class="pill">未加入</i>`
     : E.examLock(cid) ? `<i class="pill">考试未开</i>` : `<i class="pill warn">可考试</i>`;
   return `<div class="crow" data-act="ent" data-id="${cid}">
-    <div class="row between"><span>${esc(c.name)}</span>${st}</div>
+    <div class="ent">${pic(cid, 'r34 cpic')}
+      <div class="grow"><div class="row between top-al"><b>${esc(c.name)}</b>${st}</div>
+      <div class="small clamp l4">${esc(c.description || '')}</div></div>
+    </div>
     <div class="row steps">${steps}<span class="muted">›</span><i class="pill ${E.graduated(cid) ? 'ok' : ''}">考试</i></div>
   </div>`;
 }
@@ -469,7 +547,10 @@ function viewMore() {
   if (more === 'menu') {
     const items = [['clubs', '社团'], ['items', '物品与服装'], ['inf', '医务室'], ['log', '记录'], ['settings', '设置'], ['data', '备份与内容包']];
     return items.map(([k, l]) => `<button class="card menu" data-act="more" data-k="${k}">${l}<span>›</span></button>`).join('') +
-      `<p class="muted small center-t">进度簿 ${APP_VER}｜内容包 ${esc(E.C.version || '')}</p>`;
+      `<div class="card"><div class="row between"><span>程序版本 <b>${APP_VER}</b></span>${updReady
+        ? `<button class="btn small primary" data-act="applyUpd">新版已下载，更新</button>`
+        : `<button class="btn small" data-act="checkUpd">检查更新</button>`}</div>
+        <div class="muted small">内容包 ${esc(E.C.version || '')}｜更新后要再输入 PIN，进度不受影响</div></div>`;
   }
   const back = `<button class="btn ghost small" data-act="more" data-k="menu">‹ 返回</button>`;
   if (more === 'clubs') return back + viewClubs();
@@ -633,7 +714,8 @@ function viewEnt(id) {
     let html = taskCard(v, { showEnt: false });
     if (v.type === 'COMPOSITE_TASK') {
       const kids = E.childTasks(id, t.id);
-      html += `<div class="kids">${kids.map(k => taskCard(E.view(id, k.id), { showEnt: false })).join('')}</div>`;
+      const nd = kids.filter(k => E.S.done[id + ':' + k.id]?.count).length;
+      html += `<div class="kids">${fold(id + ':' + t.id, `细则 ${kids.length} 项${nd ? `（做过 ${nd}）` : ''}`, () => kids.map(k => taskCard(E.view(id, k.id), { showEnt: false })).join(''))}</div>`;
     }
     return html;
   }).join('');
@@ -762,6 +844,8 @@ const ACT = {
   lock() { doLock(); },
   tab(d) { tab = d.k; if (tab !== 'more') more = 'menu'; sel.clear(); render(); },
   more(d) { more = d.k; render(); },
+  checkUpd() { checkUpdate(); },
+  applyUpd() { applyUpdate(); },
   cf(d) { classFilter = d.k; render(); },
   af(d) { advFilter = d.k; render(); },
   back() { history.back(); },
@@ -806,6 +890,7 @@ const ACT = {
   },
   gradShow() { showGrad = true; render(); },
   gradClose() { showGrad = false; render(); },
+  fold(d) { openKids.has(d.k) ? openKids.delete(d.k) : openKids.add(d.k); render(); },
   async resetEnt(d) {
     if (!(await confirmBox('清掉这门今天的进行中任务与出席（不罚），累计完成次数保留。用于卡住时。', '重置'))) return;
     E.resetEntity(d.id); refresh();
@@ -1060,10 +1145,18 @@ export async function boot() {
     navigator.serviceWorker.register('sw.js').then(reg => {
       reg.addEventListener('updatefound', () => {
         const w = reg.installing;
-        w?.addEventListener('statechange', () => { if (w.state === 'installed' && navigator.serviceWorker.controller) toast('有新版本，下次打开生效', 4000); });
+        w?.addEventListener('statechange', () => {
+          if (w.state === 'installed' && navigator.serviceWorker.controller) { updReady = true; toast('新版程序已下载：更多 → 更新', 5000); if (screen === 'app') render(); }
+        });
       });
     }).catch(() => {});
   }
+  // 版本变了就说一声，知道更新有没有成功
+  try {
+    const was = localStorage.getItem('pbVer');
+    if (was && was !== APP_VER) setTimeout(() => toast(`已更新：${was} → ${APP_VER}`, 5000), 500);
+    localStorage.setItem('pbVer', APP_VER);
+  } catch {}
   screen = (await Vt.isSetUp()) ? 'lock' : 'setup';
   render();
 }
