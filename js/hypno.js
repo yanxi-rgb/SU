@@ -10,7 +10,7 @@ const FULL_INTRO_MIN = 8; // 任务不到 8 分钟用短诱导
 const MINI_MIN = 3;       // 不到 3 分钟：诱导、结尾都只留两句
 const LOAD_MAX = 4000;    // 配音最多等这么久，等不到就当没有、照字数估时
 const WORDS = ['服从', '乖', '乖女孩', '更深', '空', '听话', 'OBEY', 'GOOD GIRL', 'SINK', 'EMPTY'];
-// 节拍段：每句加深之后插一段 120 拍快切，每拍换一张图、闪一个词，配合成的鼓点和铺底
+// 节拍段：每句加深之后插一段 120 拍快切，每拍换一张图、闪一个词，配合成的鼓点和铺底，底下叠着念暗示语
 const BPM = 120, SPB = 60 / BPM;
 const BEAT_SEC = 32;      // 一段多长（秒）
 const BEAT_VOL = 0.32;    // 鼓点＋铺底的总音量（配音是 1）
@@ -19,6 +19,11 @@ const BEAT_WORDS = {
   zh: ['臣服', '流口水', '锁住', '乖女孩', '更深', '空白', '听话', '跪下', '是的', '想要', '放弃', '沉下去', '不准射', '软掉', '张嘴', '吞下去', '求我', '湿透'],
   en: ['SURRENDER', 'DROOL', 'LOCKED', 'GOOD GIRL', 'DEEPER', 'EMPTY', 'OBEY', 'KNEEL', 'YES', 'NEEDY', 'GIVE UP', 'SINK', 'NO CUM', 'SOFT', 'OPEN UP', 'SWALLOW', 'BEG', 'WET']
 };
+// 节拍段底下同时念暗示语：几句叠着、念快一点、左右乱飘
+const BAB_VOL = 0.45;     // 总音量（配音是 1）
+const BAB_LAYERS = 3;     // 最多同时几句
+const BAB_RATE = 1.15;    // 播放速度
+const BAB_N = 12;         // 一段先载几句来轮
 // 每八拍换一个和弦：Am → F → G → E
 const CHORDS = [[220, 261.6, 329.6], [174.6, 220, 261.6], [196, 246.9, 293.7], [164.8, 207.7, 246.9]];
 
@@ -168,6 +173,38 @@ export function openHypno(root, o) {
       setTimeout(() => { pad.forEach(({ s }) => { try { s.stop(); } catch {} }); bus.disconnect(); }, 150);
     };
   }
+  // 暗示语轰炸：BAB_LAYERS 条轨，每两拍看一次，哪条轨空了就在拍点上起一句（随机一句、随机左右，带一层回声），整段一次排好
+  function babble(t0, n, bufs) {
+    if (!ac || !bufs.length) return () => {};
+    const end = t0 + n * SPB;
+    const bus = ac.createGain(); bus.connect(master);
+    bus.gain.setValueAtTime(0, t0); bus.gain.linearRampToValueAtTime(BAB_VOL, t0 + 3);
+    bus.gain.setValueAtTime(BAB_VOL, end - 2); bus.gain.linearRampToValueAtTime(0, end);
+    const srcs = [], free = Array(BAB_LAYERS).fill(0), recent = [];
+    const one = (buf, t, gain, pan, lp) => {
+      const s = ac.createBufferSource(); s.buffer = buf; s.playbackRate.value = BAB_RATE;
+      let x = s;
+      if (lp) { const f = ac.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = lp; x.connect(f); x = f; }
+      const g = ac.createGain(); g.gain.value = gain; x.connect(g); x = g;
+      if (ac.createStereoPanner) { const p = ac.createStereoPanner(); p.pan.value = pan; x.connect(p); x = p; }
+      x.connect(bus); s.start(t); srcs.push(s);
+    };
+    for (let b = 2; b < n - 4; b += 2) {
+      const t = t0 + b * SPB, lane = free.findIndex(f => f <= t);
+      if (lane < 0) continue;
+      let j; do { j = Math.floor(Math.random() * bufs.length); } while (bufs.length > recent.length && recent.includes(j));
+      recent.push(j); if (recent.length > Math.min(4, bufs.length - 1)) recent.shift();
+      const pan = (Math.random() < .5 ? -1 : 1) * (.3 + Math.random() * .6);
+      one(bufs[j], t, .6 + Math.random() * .4, pan, 0);
+      one(bufs[j], t + .3, .25, -pan, 1500);
+      free[lane] = t + bufs[j].duration / BAB_RATE + Math.random() * 1.5;
+    }
+    return () => {
+      const t = ac.currentTime;
+      bus.gain.cancelScheduledValues(t); bus.gain.setValueAtTime(bus.gain.value, t); bus.gain.linearRampToValueAtTime(0, t + .08);
+      setTimeout(() => { srcs.forEach(s => { try { s.stop(); } catch {} }); bus.disconnect(); }, 150);
+    };
+  }
 
   // —— 文字估时（没有配音时照这个时间显示字幕） ——
   const est = t => o.lang === 'en' ? t.split(/\s+/).length * .4 + 1 : t.replace(/[\s，。…、！？：；,.!?]/g, '').length * .28 + 1;
@@ -223,9 +260,11 @@ export function openHypno(root, o) {
   // —— 节拍段 ——
   const now = () => ac ? ac.currentTime : performance.now() / 1000;
   // 先把要轮的图解好码，切的时候才不会闪白（在加深那句播的时候就开始载）；4 路并发，解码成功的才放进 got，边载边用
+  // 底下念的暗示语也一起先载，载好的放进 voice
   function beatPics() {
-    const got = [];
-    if (!o.video || !o.allImgs.length) return { got, done: Promise.resolve() };
+    const got = [], voice = [];
+    const vp = Promise.all(ac ? shuffle(pool.slice()).slice(0, BAB_N).map(a => load(`aff_${o.lang}_${a.id}`).then(b => { if (b) voice.push(b); })) : []);
+    if (!o.video || !o.allImgs.length) return { got, voice, done: vp };
     const keys = shuffle(o.allImgs.slice()).slice(0, BEAT_IMGS);
     let next = 0;
     const worker = async () => {
@@ -233,7 +272,7 @@ export function openHypno(root, o) {
         try { const u = await o.image(keys[next++]); if (!u) continue; const i = new Image(); i.alt = ''; i.src = u; await i.decode(); got.push(i); } catch {}
       }
     };
-    return { got, done: Promise.all([0, 1, 2, 3].map(worker)) };
+    return { got, voice, done: Promise.all([vp, ...[0, 1, 2, 3].map(worker)]) };
   }
   async function beatRun(pre) {
     const my = gen;
@@ -245,7 +284,7 @@ export function openHypno(root, o) {
     box.classList.add('beat');
     const words = shuffle((BEAT_WORDS[o.lang] || BEAT_WORDS.zh).slice());
     const n = Math.round(BEAT_SEC / SPB), t0 = now() + .15;
-    const musStop = music(t0, n);
+    const musStop = music(t0, n), babStop = babble(t0, n, pre.voice);
     let i = 0, k = 0, cur = null, timers = [];
     const flip = () => {
       if (!ims.length) return;
@@ -264,7 +303,7 @@ export function openHypno(root, o) {
     }, 50);
     beatStop = () => {
       beatStop = null;
-      clearInterval(sched); timers.forEach(clearTimeout); musStop();
+      clearInterval(sched); timers.forEach(clearTimeout); musStop(); babStop();
       layer.remove(); box.classList.remove('beat'); flash.classList.remove('on', 'beat');
     };
     flash.classList.add('beat');
