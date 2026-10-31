@@ -3,7 +3,7 @@ import * as E from './engine.js';
 import { openGame } from './minigame.js';
 import { openHypno } from './hypno.js';
 
-const APP_VER = '1.3.2';
+const APP_VER = '1.3.4';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const app = () => $('#app');
@@ -285,6 +285,7 @@ function viewHome() {
     out += `<h3>进行中</h3>` + S.runs.filter(r => !r.parentRid).map(runCard).join('');
   }
   // 待做惩罚
+  for (const c of E.entities('Class').filter(c => E.canGraduate(c.id))) out += `<div class="notice" data-act="ent" data-id="${c.id}">「${E.TIER_LABEL[c.tier || 0]}・${esc(c.name)}」可以结业了 →</div>`;
   const pend = S.puns.filter(p => !p.rid);
   if (pend.length) out += `<div class="notice" data-act="tab" data-k="pun">${pend.length} 项惩罚待做，每项会扣完成任务时的学分 →</div>`;
   // 可开始
@@ -323,6 +324,7 @@ function taskBits(v, R) {
   if (cr) meta.push('+' + cr + ' 学分');
   if (cost) meta.push('费用 ' + cost);
   if (d?.count) meta.push('已完成 ' + d.count + ' 次');
+  if (d?.practice) meta.push('练习 ' + d.practice + ' 次');
   const reqs = (v.requiredItems || []).map(E.reqText).filter(Boolean);
   const rs = v.requiredStats;
   if (rs && !Array.isArray(rs)) for (const [k, n] of Object.entries(rs)) reqs.push((E.C.stats[k] || k) + ' ≥ ' + n);
@@ -360,7 +362,9 @@ function taskCard(v, o = {}) {
   if (chk.unsupported) btn = `<span class="muted small">此版本不支持</span>${!E.doneToday(v.key) && E.isMember(v.eid) ? ` <button class="btn small ghost" data-act="skipU" data-e="${v.eid}" data-t="${v.tid}">跳过</button>` : ''}`;
   else if (run) btn = `<span class="pill act">进行中</span>`;
   else if (chk.ok) btn = `<button class="btn small primary" data-act="start" data-e="${v.eid}" data-t="${v.tid}" data-v="${v.vk}">开始</button>`;
-  const why = !chk.ok && !run && !chk.unsupported ? chk.why : chk.why.filter(w => w.startsWith('提示·'));
+  const prac = !run && !chk.ok && !chk.unsupported && E.canPractice(v);
+  if (prac) btn = `<button class="btn small ghost" data-act="practice" data-e="${v.eid}" data-t="${v.tid}" data-v="${v.vk}">练习</button>`;
+  const why = !chk.ok && !run && !chk.unsupported ? chk.why.concat(prac ? ['可以重复练习：不加学分、不抽惩罚'] : []) : chk.why.filter(w => w.startsWith('提示·'));
   return `<div class="card task ${o.selectable && selBlock.length ? 'dim' : ''}">
     ${head}
     <div class="row between top-al">
@@ -424,7 +428,7 @@ function runCard(r) {
   if (f.ok) btns.push(`<button class="btn primary" data-act="done" data-r="${r.rid}">完成</button>`);
   if (r.type === 'DURATION_TASK' || r.type === 'COMPOSITE_TASK') btns.push(r.pausedAt ? `<button class="btn" data-act="resume" data-r="${r.rid}">继续</button>` : `<button class="btn ghost" data-act="pause" data-r="${r.rid}">暂停</button>`);
   btns.push(`<button class="btn ghost" data-act="runMenu" data-r="${r.rid}">⋯</button>`);
-  const extra = `${r.isExam ? '・考试' : ''}・${E.TYPE_LABEL[r.type] || ''}${r.pausedAt ? '・暂停中' : ''}`;
+  const extra = `${r.practice ? '・练习（不加学分）' : ''}${r.isExam ? '・考试' : ''}・${E.TYPE_LABEL[r.type] || ''}${r.pausedAt ? '・暂停中' : ''}`;
   return `<div class="card run ${r.pausedAt ? 'paused' : ''}">
     ${r.parentRid ? `<div class="muted small">${esc(E.C.ent[r.eid]?.name || r.eid)}${extra}</div>` : entTag(r.eid, extra)}
     <div class="tap" data-act="fold" data-k="i${r.rid}">
@@ -565,14 +569,27 @@ function viewPun() {
     if (!e) { out += `<div class="card">已不存在的惩罚（${esc(p.ent)}）<button class="btn small" data-act="punDrop" data-p="${p.pid}">移除</button></div>`; continue; }
     const run = p.rid && E.runById(p.rid);
     out += `<div class="card">
-      <div class="row between"><b>${esc(e.name)}</b><i class="pill warn">${E.PUN_TIER_LABEL[p.tier]}</i></div>
+      <div class="row between top-al">${entTag(e.id)}<i class="pill warn">${E.PUN_TIER_LABEL[p.tier]}</i></div>
       <div class="muted small">${esc(p.why || '')}</div>
       ${run ? runCard(run) : E.topTasks(e.id).map(t => taskCard(E.view(e.id, t.id), { showEnt: false })).join('')}
       ${run ? '' : `<div class="row gap"><button class="btn small" data-act="punReroll" data-p="${p.pid}">重抽（${E.C.rules.punRerollCost[p.tier - 1]}）</button><button class="btn small ghost" data-act="punAbandon" data-p="${p.pid}">放弃（扣 ${E.C.rules.punAbandonCost[p.tier - 1]}）</button></div>`}
     </div>`;
   }
   if (max) out += `<div class="row gap"><button class="btn ghost" data-act="punSelf">自愿领一项</button></div>`;
+  // 惩罚一览：领到之前就能看图和做法
+  const all = E.entities('Punishment');
+  out += `<h3>惩罚一览 <span class="muted small">${all.length} 项</span></h3><p class="muted small">点开看图和完整做法。领惩罚时从目前上限那一级里抽。</p>`;
+  for (const t of [1, 2, 3]) {
+    const list = all.filter(e => e.tier === t);
+    if (list.length) out += `<div class="card">${fold('pun:' + t, `${E.PUN_TIER_LABEL[t]} ${list.length} 项${t > max ? '（还没开放）' : t === max ? '（目前从这级抽）' : ''}`, () => list.map(punRow).join(''))}</div>`;
+  }
   return out;
+}
+
+function punRow(e) {
+  const t = E.topTasks(e.id)[0];
+  const txt = t ? E.renderView(E.view(e.id, t.id)).text.replace(/<[^>]+>/g, '') : '';
+  return `<div class="crow"><div class="ent" data-act="ent" data-id="${e.id}">${pic(e.id, 'r34 thumb')}<div class="grow"><b>${esc(e.name)}</b><div class="small clamp l4">${esc(txt)}</div></div></div></div>`;
 }
 
 // —— 更多 ——
@@ -742,6 +759,7 @@ function viewEnt(id) {
       ${E.isMember(id) || E.graduated(id) ? `<div class="muted small">目前成绩 ${E.graduated(id) ? S.enrolled[id].grade : E.finalGrade(id)}（下层平均 40%＋考试 60%）</div>` : ''}`;
     pre = e.type === 'Course' ? E.courseClasses(id) : E.degreeCourses(id);
   }
+  if (e.type === 'Punishment') info = `<div class="muted small">${E.PUN_TIER_LABEL[e.tier]}惩罚｜领到后重抽 ${E.C.rules.punRerollCost[e.tier - 1]} 学分、放弃扣 ${E.C.rules.punAbandonCost[e.tier - 1]} 学分</div>`;
   if (e.type === 'Class' && E.nextClass(id)) info += `<div class="muted small">下一程度：${esc(E.C.ent[E.nextClass(id)].name)}</div>`;
   const tops = E.topTasks(id);
   const tasks = tops.map(t => {
@@ -894,18 +912,37 @@ function finishRun(rid, force = false) {
   const res = E.complete(rid, { force });
   if (res?.ok) {
     E.infMood(3);
-    toast('完成' + (res.credits ? '，+' + res.credits + ' 学分' : ''));
+    toast(r?.practice ? '练习完成（不加学分）' : '完成' + (res.credits ? '，+' + res.credits + ' 学分' : ''));
     vib(60);
   } else if (res?.why) toast(res.why);
   refresh();
+  if (res?.ok && r && !r.practice) askGraduate(r.eid);
 }
 
-async function startTask(v) {
-  const mm = E.matchingMods(v);
+// 课堂任务全部做完：提醒结业，下一程度能加入就一并问
+async function askGraduate(eid) {
+  const e = E.C.ent[eid];
+  if (e?.type !== 'Class' || !E.canGraduate(eid) || !E.allTasksDone(eid)) return;
+  const nid = E.nextClass(eid), nx = nid && E.C.ent[nid];
+  const canNext = nx && !E.isMember(nid) && !E.graduated(nid) && E.tierOk(nid);
+  const buttons = [{ label: '结业', value: 'grad', cls: canNext ? '' : 'primary' }, { label: '等一下', value: false }];
+  if (canNext) buttons.unshift({ label: `结业，加入${E.TIER_LABEL[nx.tier]}`, value: 'next', cls: 'primary' });
+  const { value } = await dialog({ html: `「${E.TIER_LABEL[e.tier || 0]}・${esc(e.name)}」的任务都做完了，可以结业。`, buttons });
+  if (!value) return;
+  const g = E.graduate(eid);
+  if (!g.ok) { toast(g.why || '不能结业'); refresh(); return; }
+  toast('结业' + (g.grade ? '，成绩 ' + g.grade : '') + (g.bonus ? '，+' + g.bonus + ' 学分' : ''));
+  if (value === 'next') { E.join(nid); toast(`已加入「${nx.name}」`); }
+  else if (nx && !E.tierOk(nid) && !E.graduated(nid)) toast(`下一程度「${nx.name}」要先解锁${E.TIER_LABEL[nx.tier]}：到「课堂」页最上面，花 ${E.C.rules.tierUnlockCost[nx.tier]} 学分`, 5000);
+  refresh();
+}
+
+async function startTask(v, practice = false) {
+  const mm = practice ? [] : E.matchingMods(v);
   if (mm.length && !(await confirmBox(`这个任务会一并执行：<br><b>${mm.map(m => m.text).join('<br>')}</b>`, '开始'))) return;
-  const cost = E.startCost(v);
+  const cost = practice ? 0 : E.startCost(v);
   if (cost && !(await confirmBox(`开始要付 ${cost} 学分。`, '付并开始'))) return;
-  const res = E.start(v);
+  const res = E.start(v, { practice });
   if (!res.ok) { toast(res.why?.join('；') || '不能开始'); return; }
   sel.clear();
   refresh();
@@ -990,6 +1027,7 @@ const ACT = {
     const r = E.unlockTier(); if (!r.ok) toast(r.why); refresh();
   },
   start(d) { const v = E.view(d.e, d.t, d.v); if (v) startTask(v); },
+  practice(d) { const v = E.view(d.e, d.t, d.v); if (v) startTask(v, true); },
   variant(d, el) {
     const card = el.closest('.card');
     const sb = card.querySelector('[data-act="start"]') || card.querySelector('[data-sel]');

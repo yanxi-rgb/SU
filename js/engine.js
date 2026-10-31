@@ -472,6 +472,9 @@ export function finalGrade(eid) {
   return gpGrade(sub * 0.4 + GP[gradeInfo(eid).grade] * 0.6);
 }
 
+// 课堂的任务全部做过（不算只靠考试结业）：用来提醒结业
+export function allTasksDone(eid) { return topTasks(eid).every(t => doneEver(eid + ':' + t.id)); }
+
 export function canGraduate(eid) {
   const e = C.ent[eid];
   if (!isMember(eid)) return false;
@@ -532,9 +535,11 @@ export function conflicts(V, extra = []) {
   return reasons;
 }
 
-export function check(V, { ignoreConflicts = false, extra = [] } = {}) {
+export function check(V, { ignoreConflicts = false, extra = [], practice = false } = {}) {
   const why = [];
   const e = V.e;
+  // 练习＝重复做（今天做过／已结业的课堂），不加学分、不抽惩罚；组合任务里的子步骤跟着父任务
+  const prac = practice || !!(V.parentId && runOf(V.eid + ':' + V.parentId)?.practice);
   if (V.type === 'ESTIM_TASK') return { ok: false, unsupported: true, why: ['此版本不支持（电刺激）'] };
   if (runOf(V.key)) return { ok: false, running: true, why: ['进行中'] };
   if (e.type === 'Punishment') {
@@ -543,13 +548,13 @@ export function check(V, { ignoreConflicts = false, extra = [] } = {}) {
     if (!S.clubs[V.eid]) why.push('未加入社团');
     if (V.perkId && !S.clubs[V.eid]?.perks?.[V.perkId]) why.push('福利未开启');
   } else {
-    if (!isMember(V.eid)) why.push(graduated(V.eid) ? '已结业' : '未加入');
+    if (!isMember(V.eid)) { if (!(prac && graduated(V.eid))) why.push(graduated(V.eid) ? '已结业' : '未加入'); }
     else if (e.type === 'Class' && !classDayOk(V.eid)) why.push('今天不排课');
     else if (examLock(V.eid)) why.push(examLock(V.eid));
   }
-  if (e.type !== 'Punishment' && doneToday(V.key)) why.push('今天已完成');
-  if (e.doOnlyOnce && doneEver(V.key)) why.push('只能做一次');
-  if (e.isSequential && !V.parentId) {
+  if (e.type !== 'Punishment' && doneToday(V.key) && !prac) why.push('今天已完成');
+  if (e.doOnlyOnce && doneEver(V.key) && !prac) why.push('只能做一次');
+  if (e.isSequential && !V.parentId && !prac) {
     const next = topTasks(V.eid).find(t => !doneEver(V.eid + ':' + t.id));
     if (next && next.id !== V.tid) why.push('要按顺序做');
   }
@@ -567,11 +572,22 @@ export function check(V, { ignoreConflicts = false, extra = [] } = {}) {
   if (!ic.ok) why.push((S.settings.strictItems ? '缺道具：' : '提示·缺道具：') + ic.missing.map(reqText).join('；'));
   const sc = statsCheck(V.requiredStats);
   if (!sc.ok) why.push((S.settings.strictItems ? '服装数值不足：' : '提示·服装数值不足：') + sc.need.join('，'));
-  const cost = startCost(V);
+  const cost = prac ? 0 : startCost(V);
   if (cost > S.credits) why.push('学分不够（要 ' + cost + '）');
   if (!ignoreConflicts) why.push(...conflicts(V, extra));
   const blocking = why.filter(w => !w.startsWith('提示·'));
-  return { ok: !blocking.length, why, cost };
+  return { ok: !blocking.length, why, cost, practice: prac };
+}
+
+// 正常不能开始、但只是因为「今天已完成／已结业／只能做一次／要按顺序做」：可以练习
+const PRAC_WHY = ['今天已完成', '已结业', '只能做一次', '要按顺序做'];
+export function canPractice(V) {
+  const e = V.e;
+  if (e.type === 'Punishment' || e.type === 'Club' || V.parentId || V.type === 'MODIFIER_TASK') return false;
+  const chk = check(V);
+  if (chk.ok || chk.running || chk.unsupported) return false;
+  if (!chk.why.some(w => PRAC_WHY.includes(w))) return false;
+  return check(V, { practice: true }).ok;
 }
 
 // ———————————————— 附加条件（配合下一个任务） ————————————————
@@ -596,6 +612,7 @@ export function start(V, opts = {}) {
   const cost = chk.cost || 0;
   if (cost) S.credits = q25(S.credits - cost);
   const short = stripTags(R0.title || R0.text).slice(0, 24) || V.tid;
+  const prac = !!chk.practice;
   const run = {
     rid: uid('r'), key: V.key, eid: V.eid, tid: V.tid, vk: V.vk, type: V.type, entType: V.entType,
     title: R0.title, text: R0.text, comment: R0.comment, short, mult: R0.mult,
@@ -603,6 +620,7 @@ export function start(V, opts = {}) {
     startedAt: now, pausedAt: null, pausedTotal: 0, durSec: 0, limitSec: 0, cost,
     mods: [], parentRid: null, notified: false, game: null, gameDone: false
   };
+  if (prac) { run.practice = true; run.noCredit = true; }
   const t = V.type;
   if (t === 'DURATION_TASK') run.durSec = S.settings.timer ? R0.durSec : 0;
   if (t === 'TIMED_TASK') run.limitSec = R0.P.timelimit?.sec || R0.durSec;
@@ -619,10 +637,10 @@ export function start(V, opts = {}) {
     const pr = runOf(V.eid + ':' + V.parentId);
     if (pr) run.parentRid = pr.rid;
   }
-  // 挂上等着配合的附加条件
-  for (const m of matchingMods(V)) { m.attachedTo = run.rid; run.mods.push(m.mid); }
+  // 挂上等着配合的附加条件（练习不挂，留给正式任务）
+  if (!prac) for (const m of matchingMods(V)) { m.attachedTo = run.rid; run.mods.push(m.mid); }
   // 本任务自带的附加条件
-  if (V.modifiers) {
+  if (V.modifiers && !prac) {
     for (const m of Object.values(V.modifiers)) {
       for (const f of m.effects || []) {
         if (!['activity', 'taggedTask', 'requirements'].includes(f.type)) continue;
@@ -639,7 +657,7 @@ export function start(V, opts = {}) {
     if (p) p.rid = run.rid;
   }
   S.runs.push(run);
-  log('开始：' + short + (cost ? '（花 ' + cost + ' 学分）' : ''));
+  log((prac ? '开始练习：' : '开始：') + short + (cost ? '（花 ' + cost + ' 学分）' : ''));
   if (t === 'INSTANT_TASK' && opts.instantDone) complete(run.rid);
   return { ok: true, run };
 }
@@ -726,7 +744,8 @@ export function complete(rid, { force = false, silent = false } = {}) {
   }
   const today = dayKey();
   const d = S.done[run.key] || (S.done[run.key] = { count: 0, first: Date.now() });
-  d.count++; d.day = today;
+  if (run.practice) d.practice = (d.practice || 0) + 1;  // 练习只记次数，不算完成
+  else { d.count++; d.day = today; }
   // 消耗挂着的附加条件
   const used = [...run.mods];
   endRun(run);
@@ -742,8 +761,8 @@ export function complete(rid, { force = false, silent = false } = {}) {
     }
   }
   if (run.entType === 'Punishment') S.puns = S.puns.filter(p => p.rid !== run.rid);
-  if (V?.roll && run.entType !== 'Punishment') rollPunishments(V.roll.amount || 1, V.roll.tier, V.tags, '任务抽签');
-  log('完成：' + run.short + (credits ? '（+' + credits + ' 学分）' : ''));
+  if (V?.roll && run.entType !== 'Punishment' && !run.practice) rollPunishments(V.roll.amount || 1, V.roll.tier, V.tags, '任务抽签');
+  log((run.practice ? '练习完成：' : '完成：') + run.short + (credits ? '（+' + credits + ' 学分）' : ''));
   // 组合任务
   if (run.parentRid) {
     const pr = runById(run.parentRid);
@@ -761,11 +780,12 @@ export function complete(rid, { force = false, silent = false } = {}) {
 export function fail(rid, { noPenalty = false, reason = '' } = {}) {
   const run = runById(rid);
   if (!run) return;
+  if (run.practice) noPenalty = true;
   endRun(run);
   dropOwnMods(run);
   // 组合任务失败：子任务一并结束
   for (const k of S.runs.filter(r => r.parentRid === run.rid)) { endRun(k); dropOwnMods(k); }
-  let msg = (noPenalty ? '放弃（不罚）：' : '失败：') + run.short + (reason ? '（' + reason + '）' : '');
+  let msg = (run.practice ? '练习中止：' : noPenalty ? '放弃（不罚）：' : '失败：') + run.short + (reason ? '（' + reason + '）' : '');
   if (run.entType === 'Punishment') {
     S.puns = S.puns.filter(p => p.rid !== run.rid);
     if (!noPenalty) {
