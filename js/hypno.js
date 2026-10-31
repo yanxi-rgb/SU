@@ -19,11 +19,11 @@ const BEAT_WORDS = {
   zh: ['臣服', '流口水', '锁住', '乖女孩', '更深', '空白', '听话', '跪下', '是的', '想要', '放弃', '沉下去', '不准射', '软掉', '张嘴', '吞下去', '求我', '湿透'],
   en: ['SURRENDER', 'DROOL', 'LOCKED', 'GOOD GIRL', 'DEEPER', 'EMPTY', 'OBEY', 'KNEEL', 'YES', 'NEEDY', 'GIVE UP', 'SINK', 'NO CUM', 'SOFT', 'OPEN UP', 'SWALLOW', 'BEG', 'WET']
 };
-// 节拍段底下同时念暗示语：几句叠着、念快一点、左右乱飘
+// 节拍段底下同时念暗示语：几句叠着、一句接一句挤着来、左右乱飘
 const BAB_VOL = 0.45;     // 总音量（配音是 1）
-const BAB_LAYERS = 3;     // 最多同时几句
-const BAB_RATE = 1.15;    // 播放速度
-const BAB_N = 12;         // 一段先载几句来轮
+const BAB_LAYERS = 5;     // 最多同时几句
+const BAB_RATE = 1;       // 播放速度（调快音调会变高，原声最好）
+const BAB_N = 20;         // 一段先载几句来轮（叠得多，句子要够杂）
 // 每八拍换一个和弦：Am → F → G → E
 const CHORDS = [[220, 261.6, 329.6], [174.6, 220, 261.6], [196, 246.9, 293.7], [164.8, 207.7, 246.9]];
 
@@ -173,7 +173,7 @@ export function openHypno(root, o) {
       setTimeout(() => { pad.forEach(({ s }) => { try { s.stop(); } catch {} }); bus.disconnect(); }, 150);
     };
   }
-  // 暗示语轰炸：BAB_LAYERS 条轨，每两拍看一次，哪条轨空了就在拍点上起一句（随机一句、随机左右，带一层回声），整段一次排好
+  // 暗示语轰炸：BAB_LAYERS 条轨，每拍看一次，哪条轨空了就在拍点上起一句（随机一句、随机左右，带一层回声），整段一次排好
   function babble(t0, n, bufs) {
     if (!ac || !bufs.length) return () => {};
     const end = t0 + n * SPB;
@@ -189,15 +189,15 @@ export function openHypno(root, o) {
       if (ac.createStereoPanner) { const p = ac.createStereoPanner(); p.pan.value = pan; x.connect(p); x = p; }
       x.connect(bus); s.start(t); srcs.push(s);
     };
-    for (let b = 2; b < n - 4; b += 2) {
+    for (let b = 2; b < n - 4; b++) {
       const t = t0 + b * SPB, lane = free.findIndex(f => f <= t);
       if (lane < 0) continue;
       let j; do { j = Math.floor(Math.random() * bufs.length); } while (bufs.length > recent.length && recent.includes(j));
       recent.push(j); if (recent.length > Math.min(4, bufs.length - 1)) recent.shift();
       const pan = (Math.random() < .5 ? -1 : 1) * (.3 + Math.random() * .6);
-      one(bufs[j], t, .6 + Math.random() * .4, pan, 0);
-      one(bufs[j], t + .3, .25, -pan, 1500);
-      free[lane] = t + bufs[j].duration / BAB_RATE + Math.random() * 1.5;
+      one(bufs[j], t, .45 + Math.random() * .3, pan, 0);
+      one(bufs[j], t + .3, .2, -pan, 1500);
+      free[lane] = t + bufs[j].duration / BAB_RATE + Math.random() * .5;
     }
     return () => {
       const t = ac.currentTime;
