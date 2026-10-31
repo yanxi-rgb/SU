@@ -65,7 +65,7 @@ export function newState() {
   return {
     v: STATE_VERSION,
     settings: {
-      ph: {}, mode: 'replica', progressive: true, manual: 1.0, schedule: 'free', rollcallExempt: false,
+      ph: {}, mode: 'replica', progressive: true, manual: 1.0, schedule: 'free',
       timer: true, autoComplete: false, pauseLimit: false, dayStartHour: 0, lockMin: 5, strictItems: true,
       onlyDoable: false, sound: true, vibrate: true, preferVariant: 'default_variant', wakeLock: true, affLang: 'zh'
     },
@@ -104,7 +104,6 @@ export function dayKey(t = Date.now()) {
   const d = new Date(t - (S.settings.dayStartHour || 0) * 3600e3);
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
-const dayNum = k => Math.round(new Date(k + 'T12:00:00').getTime() / 864e5);
 export const weekday = k => { const w = new Date(k + 'T12:00:00').getDay(); return w === 0 ? 7 : w; };
 export const WEEK = ['', '一', '二', '三', '四', '五', '六', '日'];
 const yesterday = k => { const d = new Date(k + 'T12:00:00'); d.setDate(d.getDate() - 1); return dayKey(d.getTime() + (S.settings.dayStartHour || 0) * 3600e3); };
@@ -411,7 +410,8 @@ export const isMember = eid => {
   return S.enrolled[eid]?.status === 'active';
 };
 export const graduated = eid => S.enrolled[eid]?.status === 'done';
-export const attendedToday = eid => (S.enrolled[eid]?.attended || []).includes(dayKey());
+// 用户定（2026-10-31）：加入课堂就算出席，不用每天按出席；固定排课时课堂任务只在排定的星期能做
+export const classDayOk = eid => !(S.settings.schedule === 'fixed' && C.ent[eid]?.days?.length && !C.ent[eid].days.includes(weekday(dayKey())));
 
 // 原站结构：学位 →（先修）课程 →（先修）专家课堂 → 高级 → 中级 → 初级
 // 课堂才看先修；课程、学位随时可加入，先修只挡考试
@@ -544,7 +544,7 @@ export function check(V, { ignoreConflicts = false, extra = [] } = {}) {
     if (V.perkId && !S.clubs[V.eid]?.perks?.[V.perkId]) why.push('福利未开启');
   } else {
     if (!isMember(V.eid)) why.push(graduated(V.eid) ? '已结业' : '未加入');
-    else if (e.type === 'Class' && !attendedToday(V.eid)) why.push('今天还没出席');
+    else if (e.type === 'Class' && !classDayOk(V.eid)) why.push('今天不排课');
     else if (examLock(V.eid)) why.push(examLock(V.eid));
   }
   if (e.type !== 'Punishment' && doneToday(V.key)) why.push('今天已完成');
@@ -614,6 +614,7 @@ export function start(V, opts = {}) {
     run.kidsDone = []; run.lastStepAt = now;
   }
   if (MINIGAMES.has(t)) run.game = gameConfig(V, R0);
+  run.hypno = hypnoOf(run, R0.durSec);
   if (V.parentId) {
     const pr = runOf(V.eid + ':' + V.parentId);
     if (pr) run.parentRid = pr.rid;
@@ -671,6 +672,16 @@ function gameConfig(V, R0) {
     return { kind: 'obedience', total: n };
   }
   return null;
+}
+
+// 催眠任务（文字提到催眠的计时／限时任务）：可在 App 里直接播。视频＝有图，音频＝暗屏只有螺旋和字幕
+export function hypnoOf(run, sec) {
+  if (run.type !== 'DURATION_TASK' && run.type !== 'TIMED_TASK') return null;
+  if (!/催眠/.test(run.text || '')) return null;
+  return {
+    video: /视频/.test(run.text), punish: run.entType === 'Punishment', open: run.type === 'TIMED_TASK',
+    sec: sec || run.durSec || run.limitSec || 600
+  };
 }
 
 export function remaining(run, now = Date.now()) {
@@ -820,7 +831,7 @@ export function abandonPunishment(pid, noPenalty = false) {
   log((noPenalty ? '移除惩罚（不罚）：' : '放弃惩罚，扣 ' + c + ' 学分：') + (C.ent[p.ent]?.name || p.ent));
 }
 
-// ———————————————— 加入／出席／结业 ————————————————
+// ———————————————— 加入／结业 ————————————————
 
 export function join(eid) {
   const e = C.ent[eid];
@@ -836,7 +847,7 @@ export function join(eid) {
   return { ok: true };
 }
 function enroll(eid) {
-  S.enrolled[eid] = { status: 'active', at: Date.now(), attended: [] };
+  S.enrolled[eid] = { status: 'active', at: Date.now() };
   log('加入' + ENT_LABEL[C.ent[eid].type] + '：' + C.ent[eid].name);
 }
 function autoJoinFirst(courses) {
@@ -886,20 +897,6 @@ function leaveClassesOf(cid) {
   for (const k of courseClasses(cid)) if (isMember(k)) { unenroll(k); log('连带退出课堂：' + C.ent[k].name); }
 }
 
-export function canAttend(eid) {
-  const e = C.ent[eid];
-  if (!isMember(eid) || e.type !== 'Class') return false;
-  if (attendedToday(eid)) return false;
-  if (S.settings.schedule === 'fixed' && e.days?.length && !e.days.includes(weekday(dayKey()))) return false;
-  return true;
-}
-
-export function attend(eid) {
-  if (!canAttend(eid)) return;
-  S.enrolled[eid].attended.push(dayKey());
-  log('出席：' + C.ent[eid].name);
-}
-
 export function graduate(eid) {
   if (!canGraduate(eid)) return { ok: false };
   const e = C.ent[eid];
@@ -918,9 +915,8 @@ export function graduate(eid) {
 export function resetEntity(eid) {
   for (const r of S.runs.filter(r => r.eid === eid)) fail(r.rid, { noPenalty: true, reason: '重置' });
   S.mods = S.mods.filter(m => !m.srcKey?.startsWith(eid + ':'));
-  if (S.enrolled[eid]) S.enrolled[eid].attended = S.enrolled[eid].attended.filter(d => d !== dayKey());
   for (const k of Object.keys(S.done)) if (k.startsWith(eid + ':') && S.done[k].day === dayKey()) S.done[k].day = null;
-  log('重置：' + C.ent[eid].name + '（今天的进行中与出席已清，累计完成保留）');
+  log('重置：' + C.ent[eid].name + '（今天的进行中已清，累计完成保留）');
 }
 
 export function unlockTier() {
@@ -1006,18 +1002,7 @@ export function rollover(now = Date.now()) {
   const today = dayKey(now);
   if (!S.day) { S.day = today; return; }
   if (S.day === today) return;
-  const gap = dayNum(today) - dayNum(S.day);
-  const prev = S.day;
   S.day = today;
-  if (gap > 1) { log('离开超过一天，跳过点名（' + prev + ' → ' + today + '）'); return; }
-  if (S.settings.schedule === 'fixed' && !S.settings.rollcallExempt) {
-    const wd = weekday(prev);
-    for (const [eid, en] of Object.entries(S.enrolled)) {
-      const e = C.ent[eid];
-      if (en.status !== 'active' || e?.type !== 'Class' || !(e.days || []).includes(wd)) continue;
-      if (!(en.attended || []).includes(prev)) rollPunishments(1, null, e.tags || [], '缺课：' + e.name);
-    }
-  }
   log('新的一天：' + today);
 }
 

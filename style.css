@@ -139,3 +139,43 @@ button.pill { border: 0; font-size: .8em; padding: 3px 9px; }
 .aff-bar { width: 100%; max-width: 360px; height: 6px; border-radius: 3px; background: rgba(255,255,255,.08); overflow: hidden; }
 .aff-bar i { display: block; height: 100%; width: 0; background: var(--acc); transition: width .1s linear; }
 .game:has(.aff-bar) .game-big { font-size: 2em; line-height: 1.35; max-width: 420px; }
+
+/* 催眠播放器 */
+.hyp { flex: 1; position: relative; overflow: hidden; background: #000; }
+.hyp-pic { position: absolute; inset: 0; opacity: 0; transition: opacity 1.6s ease; }
+.hyp-pic.on { opacity: 1; }
+.hyp-pic img { position: absolute; inset: 0; width: 100%; height: 100%; }
+.hyp-pic .bg { object-fit: cover; filter: blur(24px) brightness(.45); transform: scale(1.15); }
+.hyp-pic .fg { object-fit: contain; }
+.hyp-pic.kb .fg { animation: hypkb 16s ease-out forwards; }
+@keyframes hypkb { from { transform: scale(1); } to { transform: scale(1.04); } }
+.hyp-spiral { position: absolute; left: 50%; top: 50%; width: 170vmax; height: 170vmax; margin: -85vmax 0 0 -85vmax; mix-blend-mode: screen; opacity: .18; animation: hypspin 9s linear infinite; pointer-events: none; }
+.hyp.audio .hyp-spiral { opacity: .55; }
+.hyp-spiral svg { width: 100%; height: 100%; }
+@keyframes hypspin { to { transform: rotate(360deg); } }
+.hyp-veil { position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 35%, rgba(0,0,0,.75) 100%); pointer-events: none; }
+.hyp.audio .hyp-veil { background: radial-gradient(ellipse at center, rgba(0,0,0,.2) 0, rgba(0,0,0,.85) 80%); }
+.hyp.paused .hyp-spiral, .hyp.paused .hyp-pic.kb .fg { animation-play-state: paused; }
+.hyp-cap { position: absolute; left: 16px; right: 16px; bottom: 14%; text-align: center; opacity: 0; transition: opacity .6s; pointer-events: none; }
+.hyp-cap.on { opacity: 1; }
+.hyp-cap.idle .hyp-big:empty + .hyp-sub:empty { display: none; }
+.hyp-big { font: 700 1.7em/1.35 system-ui, sans-serif; color: #fff; text-shadow: 0 0 12px #ff4fb8, 0 2px 6px #000; }
+.hyp-cap.say .hyp-big { animation: hyppulse 1.6s ease-in-out infinite; }
+@keyframes hyppulse { 50% { text-shadow: 0 0 26px #ff4fb8, 0 0 6px #fff; } }
+.hyp-sub { margin-top: 6px; color: #ddd; font-size: .95em; text-shadow: 0 1px 4px #000; }
+.hyp-cap.voice .hyp-big { color: #f3dcff; font-weight: 600; font-size: 1.45em; }
+.hyp-flash { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 900 3em/1 system-ui, sans-serif; color: #fff; opacity: 0; pointer-events: none; text-align: center; padding: 16px; }
+.hyp-flash.on { opacity: .85; }
+.hyp-beat { position: absolute; inset: 0; }
+.hyp-beat img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; visibility: hidden; }
+.hyp-beat img.on { visibility: visible; animation: hyppunch .5s ease-out; }
+@keyframes hyppunch { from { transform: scale(1.07); } to { transform: scale(1); } }
+.hyp.beat .hyp-pic { opacity: 0; transition: none; }
+.hyp.beat .hyp-spiral { animation-duration: 2s; }
+.hyp-flash.beat { color: #ff4fb8; font-size: 3.4em; letter-spacing: .04em; text-shadow: 0 0 18px #ff4fb8, 0 3px 10px #000; }
+.hyp-flash.beat.on { opacity: 1; }
+.hyp-bar { position: absolute; left: 0; right: 0; top: 0; display: flex; gap: 8px; align-items: center; padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top)); background: linear-gradient(rgba(0,0,0,.6), transparent); }
+.hyp-bar .btn { background: rgba(0,0,0,.35); }
+.hyp-clock { color: #fff; font-variant-numeric: tabular-nums; font-size: 1.1em; }
+.hyp-end { position: absolute; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: rgba(0,0,0,.6); }
+.hyp-end.on { display: flex; }

@@ -1,8 +1,9 @@
 import * as Vt from './vault.js';
 import * as E from './engine.js';
 import { openGame } from './minigame.js';
+import { openHypno } from './hypno.js';
 
-const APP_VER = '1.1.4';
+const APP_VER = '1.3.1';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const app = () => $('#app');
@@ -275,7 +276,7 @@ function viewHome() {
       ${pm.map(m => `<div class="modline">· ${m.text}<span class="muted small">　来自「${esc(m.from)}」${m.usesLeft > 1 ? '，还剩 ' + m.usesLeft + ' 次' : ''}</span></div>`).join('')}`;
     if (showModMatch) {
       const list = E.startableNow(v => E.matchingMods(v).length > 0);
-      out += list.length ? list.map(v => taskCard(v, { compact: true })).join('') : `<p class="muted small">现在没有能配合的任务（先出席课堂，或检查道具）。</p>`;
+      out += list.length ? list.map(v => taskCard(v, { compact: true })).join('') : `<p class="muted small">现在没有能配合的任务（先加入课堂，或检查道具）。</p>`;
     }
     out += `</div>`;
   }
@@ -283,18 +284,13 @@ function viewHome() {
   if (S.runs.length) {
     out += `<h3>进行中</h3>` + S.runs.filter(r => !r.parentRid).map(runCard).join('');
   }
-  // 待出席
-  const att = Object.keys(S.enrolled).filter(id => E.C.ent[id] && E.canAttend(id));
-  if (att.length) {
-    out += `<h3>今天还没出席</h3><div class="chips">${att.map(id => `<button class="chip" data-act="attend" data-id="${id}">${esc(E.C.ent[id].name)} ✓</button>`).join('')}</div>`;
-  }
   // 待做惩罚
   const pend = S.puns.filter(p => !p.rid);
   if (pend.length) out += `<div class="notice" data-act="tab" data-k="pun">${pend.length} 项惩罚待做，每项会扣完成任务时的学分 →</div>`;
   // 可开始
   const list = E.startableNow(v => !v.parentId);
   out += `<h3>现在可以开始 <span class="muted small">${list.length} 项</span></h3>`;
-  if (!list.length) out += `<p class="muted">没有。去「课堂」加入课堂并出席。</p>`;
+  if (!list.length) out += `<p class="muted">没有。去「课堂」加入课堂。</p>`;
   else {
     out += `<p class="muted small">勾选多项可一起开始；会互相冲突的会自动变灰。</p>`;
     out += list.map(v => taskCard(v, { selectable: true, compact: true })).join('');
@@ -423,6 +419,8 @@ function runCard(r) {
   }
   const btns = [];
   if (r.game && !r.gameDone) btns.push(`<button class="btn primary" data-act="game" data-r="${r.rid}">${r.type === 'METRONOME_MINIGAME_TASK' ? '打开节拍器' : '开始'}</button>`);
+  const hy = r.hypno || E.hypnoOf(r);
+  if (hy && E.C.hypno) btns.push(`<button class="btn primary" data-act="hypno" data-r="${r.rid}">${hy.video ? '播放催眠视频' : '播放催眠音频'}</button>`);
   if (f.ok) btns.push(`<button class="btn primary" data-act="done" data-r="${r.rid}">完成</button>`);
   if (r.type === 'DURATION_TASK' || r.type === 'COMPOSITE_TASK') btns.push(r.pausedAt ? `<button class="btn" data-act="resume" data-r="${r.rid}">继续</button>` : `<button class="btn ghost" data-act="pause" data-r="${r.rid}">暂停</button>`);
   btns.push(`<button class="btn ghost" data-act="runMenu" data-r="${r.rid}">⋯</button>`);
@@ -668,8 +666,7 @@ function viewSettings() {
     ${selx('mode', '同时进行', [['replica', '复刻版：主动任务一次一个，被动可叠，撞部位就挡'], ['original', '原版：同一门课的非并行任务不能同时做']])}
     ${tg('progressive', '渐进难度', '同一任务每做一次，难度 +20%')}
     <label class="field"><span>手动加难 ×<b id="manualv">${s.manual}</b></span><input type="range" min="1" max="2" step="0.1" value="${s.manual}" data-set="manual"></label>
-    ${selx('schedule', '排课', [['free', '自由：哪天都能出席'], ['fixed', '固定：只能在排定的星期出席']])}
-    ${tg('rollcallExempt', '点名豁免', '固定排课时，缺课不抽惩罚')}
+    ${selx('schedule', '排课', [['free', '自由：哪天都能做'], ['fixed', '固定：课堂任务只在排定的星期能做']])}
     ${tg('strictItems', '道具检查从严', '关掉的话，缺道具只提示、不挡')}
     ${selx('preferVariant', '有多种玩法时默认', [['default_variant', '一般'], ['metronome_variant', '节拍器'], ['beattrack_variant', '节拍轨'], ['affirmations_variant', '暗示语']])}
     <h3>计时</h3>
@@ -716,7 +713,7 @@ function viewEnt(id) {
   const btns = [];
   if (e.type === 'Punishment') { }
   else if (E.isMember(id)) {
-    if (e.type === 'Class') btns.push(E.canAttend(id) ? `<button class="btn primary" data-act="attend" data-id="${id}">出席</button>` : `<span class="pill ok">${E.attendedToday(id) ? '今天已出席' : '今天不排课'}</span>`);
+    if (e.type === 'Class') btns.push(`<span class="pill ok">${E.classDayOk(id) ? '已出席' : '今天不排课'}</span>`);
     if (E.canGraduate(id)) btns.push(`<button class="btn primary" data-act="graduate" data-id="${id}">结业</button>`);
     const lc = E.leaveCost(id);
     btns.push(`<button class="btn ghost" data-act="leave" data-id="${id}">退出${lc ? '（扣 ' + lc + '）' : ''}</button>`);
@@ -833,6 +830,55 @@ async function showGame(rid) {
     onClose: () => closeGame(true)
   });
 }
+// 催眠播放器：和小游戏共用 #game 全屏层；屏幕一律常亮
+async function imgUrl(id) {
+  if (!imgIdx[id]) return null;
+  let url = imgUrls.get(id);
+  if (!url) {
+    try {
+      const b = await Vt.getBytes('img:' + id);
+      if (!b) return null;
+      url = URL.createObjectURL(new Blob([b], { type: imgIdx[id] }));
+      imgUrls.set(id, url);
+    } catch { return null; }
+  }
+  return url;
+}
+async function showHypno(rid) {
+  const r = E.runById(rid);
+  const hy = r && (r.hypno || E.hypnoOf(r));
+  const H = E.C.hypno;
+  if (!hy || !H || $('#game')) return;
+  const g = document.createElement('div');
+  g.id = 'game';
+  document.body.appendChild(g);
+  history.pushState({ game: 1 }, '');
+  if (navigator.wakeLock) { try { wake = await navigator.wakeLock.request('screen'); } catch {} }
+  const canPause = r.type === 'DURATION_TASK' && r.durSec;
+  // 催眠图名 hyp_<句号><版本>：按开头的句号配到那句暗示语
+  const affs = E.C.affirmations || [], byN = new Map(affs.map(a => [a.n, a.id]));
+  const allImgs = Object.keys(imgIdx).filter(k => k.startsWith('hyp_')), imgs = {};
+  for (const k of allImgs) { const id = byN.get(parseInt(k.slice(4))); if (id) (imgs[id] ||= []).push(k); }
+  // 还没配到图的句子（如第 83 句）先不念，等图补进包里自动加入；包里完全没催眠图时照旧全念
+  const lines = allImgs.length ? affs.filter(a => imgs[a.id]) : affs;
+  gameStop = openHypno(g, {
+    lines, imgs, allImgs, voice: H.voice || [],
+    tags: r.tags || [], video: hy.video, punish: hy.punish, open: hy.open, sec: hy.sec,
+    lang: E.S.settings.affLang || 'zh', setLang: l => { E.S.settings.affLang = l; save(); },
+    rem: () => E.runById(rid) ? E.remaining(r) : 0,
+    elapsed: () => E.elapsed(r),
+    paused: () => !!r.pausedAt,
+    pause: () => { if (canPause) { E.pause(rid); refresh(); } },
+    resume: () => { if (canPause) { E.resume(rid); refresh(); } },
+    audio: async key => {
+      if (!audIdx[key]) return null;
+      try { const b = await Vt.getBytes('aud:' + key); return b ? b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) : null; } catch { return null; }
+    },
+    image: imgUrl,
+    onDone: () => { closeGame(true); finishRun(rid); },
+    onClose: () => closeGame(true)
+  });
+}
 function closeGame(viaUi = false) {
   if (gameStop) gameStop();
   gameStop = null;
@@ -864,6 +910,7 @@ async function startTask(v) {
   sel.clear();
   refresh();
   if (res.run.game) showGame(res.run.rid);
+  else if (res.run.hypno && E.C.hypno) showHypno(res.run.rid);
 }
 
 const ACT = {
@@ -895,7 +942,6 @@ const ACT = {
   ent(d) { openSheet({ kind: 'ent', id: d.id }); },
   modMatch() { showModMatch = !showModMatch; render(); },
   checkin(d) { E.checkin(d.k === 'chastity' ? 'chastity' : 'normal'); refresh(); },
-  attend(d) { E.attend(d.id); toast('已出席：' + E.C.ent[d.id].name); refresh(); },
   async join(d) {
     const e = E.C.ent[d.id];
     if (e.type === 'Degree') {
@@ -935,7 +981,7 @@ const ACT = {
   gradClose() { showGrad = false; render(); },
   fold(d) { openKids.has(d.k) ? openKids.delete(d.k) : openKids.add(d.k); render(); },
   async resetEnt(d) {
-    if (!(await confirmBox('清掉这门今天的进行中任务与出席（不罚），累计完成次数保留。用于卡住时。', '重置'))) return;
+    if (!(await confirmBox('清掉这门今天的进行中任务（不罚），累计完成次数保留。用于卡住时。', '重置'))) return;
     E.resetEntity(d.id); refresh();
   },
   async unlockTier() {
@@ -954,6 +1000,7 @@ const ACT = {
   },
   skipU(d) { E.skipUnsupported(E.view(d.e, d.t)); refresh(); },
   game(d) { showGame(d.r); },
+  hypno(d) { showHypno(d.r); },
   done(d) { finishRun(d.r); },
   pause(d) { E.pause(d.r); refresh(); },
   resume(d) { E.resume(d.r); refresh(); },
