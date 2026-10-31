@@ -1,4 +1,4 @@
-// 催眠播放器：螺旋＋图（Ken Burns）＋暗示语配音（带回声）＋耳语复读＋双耳低频嗡声＋潜意识闪字。
+// 催眠播放器：螺旋＋图（Ken Burns）＋暗示语配音（带回声，和诱导同一种念法，一句接一句）＋双耳低频嗡声＋潜意识闪字。
 // 时长一律跟任务计时器走：诱导 → 暗示语轮播 → 结尾，结尾按配音实际长度倒推，最后一个字落在“时间到”。
 // 时间按真实钟点算（o.rem() 每步重读），切出去再回来会接到该在的段落；暂停＝任务暂停。
 
@@ -98,8 +98,8 @@ export function openHypno(root, o) {
     const d = drone; drone = null;
     setTimeout(() => d.os.forEach(s => { try { s.stop(); } catch {} }), sec * 1000 + 100);
   }
-  // 播一段；echo＝叠两层错开的回声，whisper＝压低、滤高音、偏一边的耳语
-  function play(buf, { echo = false, whisper = false } = {}) {
+  // 播一段；echo＝叠两层错开的回声
+  function play(buf, { echo = false } = {}) {
     const my = gen;
     if (!ac || !buf) return Promise.resolve(false);
     return new Promise(res => {
@@ -116,7 +116,7 @@ export function openHypno(root, o) {
         return s;
       };
       const side = Math.random() < .5 ? -1 : 1;
-      const main = whisper ? one(0, .5, .8 * side, 2200) : one(0, 1, 0, 0);
+      const main = one(0, 1, 0, 0);
       if (echo) { one(.35, .28, -.7 * side, 1600); one(.7, .14, .7 * side, 1200); }
       main.onended = () => { sources = sources.filter(s => s !== main); res(my === gen); };
       main._res = res;
@@ -171,7 +171,6 @@ export function openHypno(root, o) {
 
   // —— 文字估时（没有配音时照这个时间显示字幕） ——
   const est = t => o.lang === 'en' ? t.split(/\s+/).length * .4 + 1 : t.replace(/[\s，。…、！？：；,.!?]/g, '').length * .28 + 1;
-  const repeatGap = t => Math.min(12, Math.max(2.5, est(t) + .5));
   const vline = n => o.voice.find(v => v.n === n);
   const vkey = n => `hypv_${o.lang}_${n}`;
   const loadT = key => Promise.race([load(key), new Promise(r => setTimeout(() => r(null), LOAD_MAX))]);
@@ -301,17 +300,12 @@ export function openHypno(root, o) {
     if (my !== gen) return false;
     const nextA = queue[0]; if (nextA) load(`aff_${o.lang}_${nextA.id}`);
     if (!(b ? await play(b, { echo: true }) : await wait(est(text) * 1000))) return false;
-    cap.classList.add('say');
-    if (!(await wait(repeatGap(text) * 1000))) return false;
-    cap.classList.remove('say');
-    if (b && !(await play(b, { whisper: true }))) return false;
-    return wait(1200);
+    return wait(GAP * 1000);
   }
   async function sentenceLen(a) {
     const text = a[o.lang] || a.zh;
     const b = await loadT(`aff_${o.lang}_${a.id}`);
-    const d = b ? b.duration : est(text);
-    return d + repeatGap(text) + (b ? d : 0) + 1.4;
+    return (b ? b.duration : est(text)) + GAP;
   }
 
   const every = o.deepEvery || DEEP_EVERY;
