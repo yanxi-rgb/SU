@@ -15,6 +15,14 @@ const BPM = 120, SPB = 60 / BPM;
 const BEAT_SEC = 32;      // 一段多长（秒）
 const BEAT_VOL = 0.32;    // 鼓点＋铺底的总音量（配音是 1）
 const BEAT_IMGS = 32;     // 一段轮几张（不够 64 拍就循环）
+// 视频（图生视频，5 秒，和图同名）：暗示语那张图有视频就放视频；节拍段每 16 拍插 4 拍视频片段（静音）
+const VID_PREFER = 0.7;   // 那句有图也有视频时，挑视频的机率
+const VID_VOL = 0.35;     // 视频自带的喘息声垫在配音底下
+const BEAT_VIDS = 4;      // 一段先载几条视频片段
+const VID_EVERY = 16, VID_BEATS = 4;
+// 长视频（首尾帧相接的片段）：诱导时连播变身 T1～T9；节拍段抽一个动作 A<k>，进入→循环 N 遍→退出排满一段（静音）
+const TRANSFORM = ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9'];
+const ACT_BEATS = 6;      // 节拍段每 8 拍里几拍看动作（其余快切图）
 const BEAT_WORDS = {
   zh: ['臣服', '流口水', '锁住', '乖女孩', '更深', '空白', '听话', '跪下', '是的', '想要', '放弃', '沉下去', '不准射', '软掉', '张嘴', '吞下去', '求我', '湿透'],
   en: ['SURRENDER', 'DROOL', 'LOCKED', 'GOOD GIRL', 'DEEPER', 'EMPTY', 'OBEY', 'KNEEL', 'YES', 'NEEDY', 'GIVE UP', 'SINK', 'NO CUM', 'SOFT', 'OPEN UP', 'SWALLOW', 'BEG', 'WET']
@@ -37,13 +45,67 @@ function spiralSvg() {
     <polyline points="${pts(0)}" stroke="#ff4fb8"/><polyline points="${pts(Math.PI)}" stroke="#9b5cff"/></g></svg>`;
 }
 
-// o: { lines, imgs, allImgs, voice, tags, video, punish, open, sec, lang, setLang,
-//      rem(), elapsed(), paused(), pause(), resume(), audio(key), image(name), onDone(), onClose() }
+// 一串首尾帧相接的视频接着播：两个 video 轮流，下一段先载好，前一段停在最后一帧（＝下一段第一帧），等下一段真的在播才换上
+// sound＝{ ac, out }：声音接进播放器那个 AudioContext（视频自己开声音输出，第一段会卡好几秒才动）；不给就静音
+function chainPlay(wrap, urls, sound = null) {
+  const vs = [0, 1].map(() => {
+    const v = el('video'); v.playsInline = true; v.preload = 'auto'; v.muted = !sound; wrap.appendChild(v);
+    if (sound) { try { const g = sound.ac.createGain(); g.gain.value = VID_VOL; sound.ac.createMediaElementSource(v).connect(g).connect(sound.out); } catch { v.muted = true; } }
+    return v;
+  });
+  let i = 0, cur = 0, stopped = false, paused = false, finished = false, onDone;
+  const done = new Promise(r => { onDone = r; });
+  const go = v => v.play().catch(() => { v.muted = true; return v.play().catch(() => {}); });
+  const prep = (v, k) => { if (k < urls.length) v.src = urls[k]; };
+  vs[0].src = urls[0]; prep(vs[1], 1); vs[0].classList.add('cur');
+  const onEnd = () => {
+    if (stopped) return;
+    if (i + 1 >= urls.length) { finished = true; onDone(); return; }
+    i++;
+    const a = vs[cur], b = vs[1 - cur];
+    b.addEventListener('playing', () => { b.classList.add('cur'); a.classList.remove('cur'); prep(a, i + 1); }, { once: true });
+    cur = 1 - cur;
+    if (!paused) go(b);
+  };
+  vs.forEach(v => { v.onended = onEnd; });
+  go(vs[0]);
+  return {
+    done, get finished() { return finished; },
+    pause() { paused = true; vs[cur].pause(); },
+    resume() { paused = false; if (!finished && !stopped) go(vs[cur]); },
+    stop() { stopped = true; vs.forEach(v => { v.pause(); v.removeAttribute('src'); v.load(); }); onDone(); }
+  };
+}
+const durOf = url => new Promise(res => {
+  const v = el('video'); v.preload = 'metadata';
+  const t = setTimeout(() => res(5.17), 3000);
+  v.onloadedmetadata = () => { clearTimeout(t); res(v.duration || 5.17); };
+  v.onerror = () => { clearTimeout(t); res(5.17); };
+  v.src = url;
+});
+
+// o: { lines, imgs, allImgs, vids, chain, voice, tags, video, punish, open, sec, lang, setLang,
+//      rem(), elapsed(), paused(), pause(), resume(), audio(key), image(name), movie(name), clip(name), onDone(), onClose() }
+// vids：有视频的图名（Set），movie(图名) 给视频网址；chain：有的长视频片段名（Set，T1…、A1in／A1loop／A1out…），clip(片段名) 给网址
 export function openHypno(root, o) {
   root.innerHTML = '';
   const box = el('div', 'hyp' + (o.video ? '' : ' audio'));
-  // 每层：底下一张放大模糊的铺满，上面一张完整显示（不裁切）
-  const pics = [0, 1].map(() => { const d = el('div', 'hyp-pic'); d.append(el('img', 'bg'), el('img', 'fg')); return d; });
+  const vids = o.vids || new Set();
+  // 每层：底下一张放大模糊的铺满，上面一张完整显示（不裁切）；有视频时上面换成视频
+  const pics = [0, 1].map(() => {
+    const d = el('div', 'hyp-pic'), v = el('video', 'fg');
+    v.playsInline = true; v.preload = 'auto'; v.volume = VID_VOL;
+    d.append(el('img', 'bg'), el('img', 'fg'), v); return d;
+  });
+  const stopVid = p => { const v = p.querySelector('video'); v.pause(); };
+  const playVid = v => v.play().catch(() => { v.muted = true; return v.play().catch(() => {}); });
+  // 长视频：变身层（诱导时）；有齐进入／循环／退出三段的动作才抽
+  const chain = o.video && o.clip ? (o.chain || new Set()) : new Set();
+  const story = el('div', 'hyp-story');
+  const hasTransform = TRANSFORM.every(k => chain.has(k));
+  const acts = [...chain].map(k => k.match(/^(A\d+)in$/)?.[1]).filter(k => k && chain.has(k + 'loop') && chain.has(k + 'out'));
+  let actBag = [], transform = null;
+  const nextAct = () => { if (!actBag.length) actBag = shuffle(acts.slice()); return actBag.shift(); };
   const spiral = el('div', 'hyp-spiral'); spiral.innerHTML = spiralSvg();
   const veil = el('div', 'hyp-veil');
   const flash = el('div', 'hyp-flash');
@@ -56,7 +118,7 @@ export function openHypno(root, o) {
   const bClose = el('button', 'btn ghost', '✕');
   bar.append(clock, el('span', 'grow'), bLang, bPause, bClose);
   const endBox = el('div', 'hyp-end');
-  box.append(...pics, spiral, veil, flash, cap, endBox, bar);
+  box.append(...pics, story, spiral, veil, flash, cap, endBox, bar);
   root.appendChild(box);
   pics.forEach(p => p.querySelectorAll('img').forEach(i => { i.alt = ''; i.onerror = () => p.classList.remove('on'); }));
 
@@ -231,16 +293,41 @@ export function openHypno(root, o) {
 
   // —— 画面 ——
   let front = 0;
+  const pick = a => a[Math.floor(Math.random() * a.length)];
+  // 变身还没播完就不换图；播完了，换第一张图时淡出变身层
+  function startTransform() {
+    if (transform || !hasTransform) return;
+    transform = { p: null };
+    Promise.all(TRANSFORM.map(k => o.clip(k))).then(urls => {
+      if (dead || !transform || urls.some(u => !u)) { transform = null; return; }
+      transform.p = chainPlay(story, urls, ac && { ac, out: master });
+      if (paused) transform.p.pause();
+      story.classList.add('on');
+    });
+  }
+  function endTransform() {
+    if (!transform) return;
+    const t = transform; transform = null;
+    story.classList.remove('on');
+    setTimeout(() => { t.p?.stop(); story.innerHTML = ''; }, 1700);
+  }
   async function showPic(aff) {
     if (!o.video) return;
+    if (transform) { if (!transform.p?.finished) return; endTransform(); }
     const list = (aff && o.imgs[aff.id]?.length ? o.imgs[aff.id] : o.allImgs);
     if (!list.length) return;
-    const url = await o.image(list[Math.floor(Math.random() * list.length)]);
+    const vl = aff && o.movie ? list.filter(k => vids.has(k)) : [];
+    const key = vl.length && Math.random() < VID_PREFER ? pick(vl) : pick(list);
+    const [url, mv] = await Promise.all([o.image(key), vl.includes(key) ? o.movie(key) : null]);
     if (!url || dead) return;
-    const nx = pics[1 - front], cur = pics[front];
+    const nx = pics[1 - front], cur = pics[front], v = nx.querySelector('video');
     nx.querySelectorAll('img').forEach(i => { i.src = url; });
+    // 视频从第一帧（＝这张图）开始，放完停在最后一帧
+    nx.classList.toggle('mv', !!mv);
+    if (mv) { v.src = mv; v.currentTime = 0; if (!paused) playVid(v); }
     nx.classList.remove('kb'); void nx.offsetWidth; nx.classList.add('kb', 'on');
     cur.classList.remove('on');
+    setTimeout(() => { if (!cur.classList.contains('on')) stopVid(cur); }, 1700);
     front = 1 - front;
   }
   let flashT = null;
@@ -262,9 +349,18 @@ export function openHypno(root, o) {
   // 先把要轮的图解好码，切的时候才不会闪白（在加深那句播的时候就开始载）；4 路并发，解码成功的才放进 got，边载边用
   // 底下念的暗示语也一起先载，载好的放进 voice
   function beatPics() {
-    const got = [], voice = [];
+    const got = [], voice = [], clips = [], res = { got, voice, clips, act: null };
     const vp = Promise.all(ac ? shuffle(pool.slice()).slice(0, BAB_N).map(a => load(`aff_${o.lang}_${a.id}`).then(b => { if (b) voice.push(b); })) : []);
-    if (!o.video || !o.allImgs.length) return { got, voice, done: vp };
+    // 动作：进入＋循环 N 遍＋退出，N 按三段实际长度排到刚好不超过一段
+    const ap = acts.length ? (async () => {
+      const k = nextAct();
+      const u = await Promise.all(['in', 'loop', 'out'].map(s => o.clip(k + s)));
+      if (u.some(x => !x) || dead) return;
+      const d = await Promise.all(u.map(durOf));
+      const n = Math.max(1, Math.floor((BEAT_SEC + .3 - d[0] - d[2]) / d[1]));
+      res.act = [u[0], ...Array(n).fill(u[1]), u[2]];
+    })() : null;
+    if (!o.video || !o.allImgs.length) return { ...res, done: Promise.all([vp, ap]) };
     const keys = shuffle(o.allImgs.slice()).slice(0, BEAT_IMGS);
     let next = 0;
     const worker = async () => {
@@ -272,7 +368,17 @@ export function openHypno(root, o) {
         try { const u = await o.image(keys[next++]); if (!u) continue; const i = new Image(); i.alt = ''; i.src = u; await i.decode(); got.push(i); } catch {}
       }
     };
-    return { got, voice, done: Promise.all([vp, ...[0, 1, 2, 3].map(worker)]) };
+    // 视频片段：静音，载到能播才放进 clips
+    const vk = o.movie && !acts.length ? shuffle([...vids]).slice(0, BEAT_VIDS) : [];
+    const cp = vk.map(async k => {
+      try {
+        const u = await o.movie(k); if (!u || dead) return;
+        const v = el('video'); v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = u;
+        await new Promise((ok, bad) => { v.onloadeddata = ok; v.onerror = bad; });
+        clips.push(v);
+      } catch {}
+    });
+    return Object.assign(res, { done: Promise.all([vp, ap, ...cp, ...[0, 1, 2, 3].map(worker)]) });
   }
   async function beatRun(pre) {
     const my = gen;
@@ -282,27 +388,49 @@ export function openHypno(root, o) {
     const layer = el('div', 'hyp-beat'), ims = pre.got;
     box.insertBefore(layer, spiral);
     box.classList.add('beat');
+    pics.forEach(stopVid);
+    if (transform) { transform.p?.stop(); transform = null; story.classList.remove('on'); story.innerHTML = ''; }
     const words = shuffle((BEAT_WORDS[o.lang] || BEAT_WORDS.zh).slice());
     const n = Math.round(BEAT_SEC / SPB), t0 = now() + .15;
     const musStop = music(t0, n), babStop = babble(t0, n, pre.voice);
-    let i = 0, k = 0, cur = null, timers = [];
-    const flip = () => {
-      if (!ims.length) return;
-      cur?.classList.remove('on'); cur = ims[k++ % ims.length];
+    const clips = pre.clips || [];
+    let i = 0, k = 0, kv = 0, cur = null, timers = [];
+    const show = n => {
+      if (cur?.tagName === 'VIDEO') cur.pause();
+      cur?.classList.remove('on'); cur = n;
       if (cur.parentNode !== layer) layer.appendChild(cur);
       cur.classList.add('on');
     };
+    const flip = () => { if (ims.length) show(ims[k++ % ims.length]); };
+    // 视频片段从中段随便一处开始放 VID_BEATS 拍
+    const clip = () => {
+      const v = clips[kv++ % clips.length], len = VID_BEATS * SPB;
+      v.currentTime = Math.random() * Math.max(0, (v.duration || 5) - len - .5) + .3;
+      show(v); v.play().catch(() => {});
+    };
+    // 动作在底下从头播到尾（切去看图时也不停），每 8 拍里 ACT_BEATS 拍露出来
+    let actP = null, actDiv = null;
+    if (pre.act) {
+      actDiv = el('div', 'hyp-act'); layer.appendChild(actDiv);
+      timers.push(setTimeout(() => { actP = chainPlay(actDiv, pre.act); }, (t0 - now()) * 1000));
+    }
+    const inAct = b => actDiv && b % 8 < ACT_BEATS;
+    const inClip = b => !actDiv && clips.length && b % VID_EVERY >= VID_EVERY - VID_BEATS;
     const word = b => { flash.textContent = words[b % words.length]; flash.classList.add('on'); setTimeout(() => flash.classList.remove('on'), 260); };
     // 画面跟音频钟对齐：每 50 毫秒把快到的拍子排进 setTimeout
     const sched = setInterval(() => {
       while (i < n && t0 + i * SPB < now() + .2) {
         const b = i++, at = (t0 + b * SPB - now()) * 1000;
-        timers.push(setTimeout(() => { flip(); word(b); }, at));
-        if (b % 8 === 7) timers.push(setTimeout(flip, at + SPB * 500));  // 每八拍多切一下（半拍）
+        if (inAct(b)) timers.push(setTimeout(() => { if (cur !== actDiv) show(actDiv); word(b); }, at));
+        else if (!inClip(b)) timers.push(setTimeout(() => { flip(); word(b); }, at));
+        else timers.push(setTimeout(() => { if (b % VID_EVERY === VID_EVERY - VID_BEATS) clip(); word(b); }, at));
+        if (b % 8 === 7 && !inClip(b) && !inAct(b)) timers.push(setTimeout(flip, at + SPB * 500));  // 每八拍多切一下（半拍）
       }
     }, 50);
     beatStop = () => {
       beatStop = null;
+      actP?.stop();
+      clips.forEach(v => v.pause());
       clearInterval(sched); timers.forEach(clearTimeout); musStop(); babStop();
       layer.remove(); box.classList.remove('beat'); flash.classList.remove('on', 'beat');
     };
@@ -359,6 +487,7 @@ export function openHypno(root, o) {
     startDrone();
     if (remain() <= 0 && !o.open) return end();
     if (phase === 'back' || phase === 'intro') {
+      if (phase === 'intro' && idx === 0) startTransform();
       const list = phase === 'back' ? VOICE.back : introList();
       while (idx < list.length) {
         const need = await lineLen(list[idx]);
@@ -428,6 +557,8 @@ export function openHypno(root, o) {
     box.classList.toggle('paused', p);
     if (p) {
       abort();
+      pics.forEach(stopVid);
+      transform?.p?.pause();
       if (!fromTask) o.pause();
       if (ownClock && !localPauseAt) localPauseAt = Date.now();
       ac?.suspend().catch(() => {});
@@ -436,6 +567,7 @@ export function openHypno(root, o) {
       if (!fromTask) o.resume();
       if (ownClock && localPauseAt) { localPaused += Date.now() - localPauseAt; localPauseAt = 0; }
       ac?.resume().catch(() => {});
+      transform?.p?.resume();
       if (phase !== 'end') restart();  // 从被打断的那一句重来
     }
   }
@@ -458,13 +590,15 @@ export function openHypno(root, o) {
     if (tp !== lastTP) { lastTP = tp; if (tp !== paused) setPaused(tp, true); }
   }, 500);
   // 切回前台：重新对时（setTimeout 在后台会被拖慢）
-  const onVis = () => { if (document.visibilityState === 'visible' && begun) { ac?.resume().catch(() => {}); restart(); } };
+  const onVis = () => { if (document.visibilityState === 'visible' && begun) { ac?.resume().catch(() => {}); if (!paused) transform?.p?.resume(); restart(); } };
   document.addEventListener('visibilitychange', onVis);
 
   function stop() {
     if (dead) return;
     dead = true;
     abort();
+    pics.forEach(stopVid);
+    transform?.p?.stop();
     clearInterval(tick); clearTimeout(flashT);
     document.removeEventListener('visibilitychange', onVis);
     fadeDrone(.3);

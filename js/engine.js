@@ -341,6 +341,43 @@ export function outfitStats() {
   return st;
 }
 
+// —— 穿戴部位：同一部位只穿一件，穿新的自动换下旧的 ——
+// 照原站 inventory/equipItems：化妆、首饰、一般道具、假阳具、增强品可叠；「腿」（连体衣、整套服装）和各层袜／裤互撞。
+// 原站没有、我加的（2026-11-09 用户：「穿相同部位的衣物的时候应该会自行替换」）：
+// 全身类（裸体、娃娃服、脱衣舞服）换下身上的衣服和内衣（袜子、鞋、配件照留）；女仆围裙可套在外面；假阳具贞操笼也占贞操位。
+const STACK_SLOTS = new Set(['ENHANCER', 'COSMETICS', 'DILDO', 'GENERIC', 'JEWELRY']);
+const LEG_LAYERS = new Set(['LEGS_HOSIERY', 'LEGS_STOCKINGS', 'LEGS_SOCKS', 'LEGS_OUTERWEAR']);
+const ALL_HITS = new Set(['UPPER_BODY', 'LOWER_BODY', 'JACKET', 'UNDERWEAR_UPPER', 'UNDERWEAR_LOWER', 'LEGS', 'LEGS_OUTERWEAR', 'FULL_BODY', 'ALL']);
+const SLOT_FIX = { MAID_APRON: [], STRAPON_CHASTITY: ['CROTCH', 'CHASTITY'] };
+export const SLOT_LABEL = {
+  HEAD: '头饰', HAIR: '发型', MASK: '头套', EYES: '眼', MOUTH: '口', NECK: '颈', EARS: '耳', HANDS: '手', WRISTS: '手腕', ARMS: '手臂',
+  WAIST: '腰', CORSET: '束腰', CROTCH: '胯下', CHASTITY: '贞操', BUTT: '后庭', UPPER_BODY: '上身', JACKET: '外套', LOWER_BODY: '下身',
+  UNDERWEAR_UPPER: '胸罩', UNDERWEAR_LOWER: '内裤', LEGS: '腿', LEGS_HOSIERY: '连裤袜', LEGS_STOCKINGS: '长筒袜', LEGS_SOCKS: '短袜',
+  LEGS_OUTERWEAR: '裤子', FEET: '脚', SHOES: '鞋', BACK: '背', FULL_BODY: '全身', ALL: '全身'
+};
+const slotHit = (a, b) => a === b || (a === 'LEGS' && LEG_LAYERS.has(b)) || (b === 'LEGS' && LEG_LAYERS.has(a)) || (a === 'ALL' && ALL_HITS.has(b)) || (b === 'ALL' && ALL_HITS.has(a));
+const wearSlots = id => (SLOT_FIX[id] || C.items[id]?.slots || []).filter(s => !STACK_SLOTS.has(s));
+export const wearClash = (a, b) => a !== b && wearSlots(a).some(x => wearSlots(b).some(y => slotHit(x, y)));
+// 物品卡上写的部位（可叠的、剃毛不写）
+export const slotText = id => wearSlots(id).filter(s => SLOT_LABEL[s]).map(s => SLOT_LABEL[s]).join('＋');
+
+// 穿上／脱下；回传被换下的物品 ID
+export function wear(id, on) {
+  if (!on) { delete S.wearing[id]; return []; }
+  const off = Object.keys(S.wearing).filter(k => S.wearing[k] && wearClash(id, k));
+  for (const k of off) delete S.wearing[k];
+  S.wearing[id] = true;
+  if (off.length) log('换装：穿上' + (C.items[id]?.name || id) + '，换下' + off.map(k => C.items[k]?.name || k).join('、'));
+  return off;
+}
+// 以前存档里已经同时穿着、会互撞的几组
+export function wearClashes() {
+  const on = Object.keys(S.wearing).filter(k => S.wearing[k] && C.items[k]);
+  const out = [];
+  on.forEach((a, i) => on.slice(i + 1).forEach(b => { if (wearClash(a, b)) out.push([a, b]); }));
+  return out;
+}
+
 export function statsCheck(rs) {
   if (!rs) return { ok: true, need: [] };
   const st = outfitStats();

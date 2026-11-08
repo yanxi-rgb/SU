@@ -3,7 +3,7 @@ import * as E from './engine.js';
 import { openGame } from './minigame.js';
 import { openHypno } from './hypno.js';
 
-const APP_VER = '1.3.6';
+const APP_VER = '1.3.9';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const app = () => $('#app');
@@ -456,21 +456,41 @@ function runInfo(r, V) {
   </div>`;
 }
 
-// —— 课堂 ——
+// —— 拼图格（课堂、课程、学位、社团） ——
+// 用户（2026-11-09）：「显示课程的时候可以换成拼图式的吗？我不要列表式的」→ 封面大图排成格子，名称压在图上，说明点开看
 
-function entCard(e) {
-  const st = E.graduated(e.id) ? `<i class="pill ok">已结业 ${E.S.enrolled[e.id].grade || ''}</i>` : E.isMember(e.id) ? `<i class="pill act">已加入</i>` : '';
-  let prog = '';
-  if (E.isMember(e.id) && e.type === 'Class') { const g = E.gradeInfo(e.id); prog = `<span class="muted small">${g.done}／${g.total}</span>`; }
-  const days = e.days?.length ? '周' + e.days.map(d => E.WEEK[d]).join('') : '';
-  return `<div class="card ent" data-act="ent" data-id="${e.id}">
-    ${pic(e.id, 'r34 thumb')}
-    <div class="grow">
-      <div class="row between"><b>${esc(e.name)}</b>${st}</div>
-      <div class="muted small">${e.type === 'Class' ? E.TIER_LABEL[e.tier || 0] : E.ENT_LABEL[e.type]}${days ? '｜' + days : ''} ${prog}</div>
-      <div class="small clamp">${esc(e.description || '')}</div>
-    </div>
+const grid = tiles => `<div class="grid">${tiles.join('')}</div>`;
+
+function statusPill(id) {
+  if (E.graduated(id)) return `<i class="pill ok">已结业 ${E.S.enrolled[id].grade || ''}</i>`;
+  if (E.isMember(id)) return `<i class="pill act">${E.C.ent[id].type === 'Degree' ? '在读' : '已加入'}</i>`;
+  return '';
+}
+
+function tile(id, { badge = statusPill(id), sub = '', extra = '', dim = false } = {}) {
+  const e = E.C.ent[id];
+  return `<div class="tile ${dim ? 'dim' : ''}" data-act="ent" data-id="${id}">
+    ${pic(id, 'r34')}
+    ${badge ? `<div class="tbadge">${badge}</div>` : ''}
+    <div class="tcap"><b>${esc(e.name)}</b>${sub ? `<div class="tsub">${esc(sub)}</div>` : ''}${extra}</div>
   </div>`;
+}
+
+// 课堂格；withTier＝写出程度（课堂页按程度分组时不写）
+function classTile(e, withTier = true) {
+  const bits = [];
+  if (withTier) bits.push(E.TIER_LABEL[e.tier || 0]);
+  if (e.days?.length) bits.push('周' + e.days.map(d => E.WEEK[d]).join(''));
+  if (E.isMember(e.id)) { const g = E.gradeInfo(e.id); bits.push(g.done + '／' + g.total); }
+  return tile(e.id, { sub: bits.join('｜'), dim: !E.isMember(e.id) && !E.graduated(e.id) && !E.tierOk(e.id) });
+}
+
+// 课程格：底下一排「初中高专考」看进度（绿＝结业、蓝＝在读）
+function courseTile(cid) {
+  const steps = E.courseClasses(cid).map(k => `<i class="${E.graduated(k) ? 'ok' : E.isMember(k) ? 'act' : ''}">${E.TIER_LABEL[E.C.ent[k].tier || 0][0]}</i>`).join('');
+  const canExam = E.isMember(cid) && !E.examLock(cid);
+  const badge = canExam ? `<i class="pill warn">可考试</i>` : statusPill(cid);
+  return tile(cid, { badge, extra: `<div class="tsteps">${steps}<i class="${E.graduated(cid) ? 'ok' : canExam ? 'warn' : ''}">考</i></div>` });
 }
 
 function filterEnts(list, f) {
@@ -487,7 +507,11 @@ function viewClasses() {
   if (next <= 4) out += `<div class="row between card"><span>已解锁到 <b>${E.TIER_LABEL[E.S.tier]}</b></span><button class="btn small" data-act="unlockTier">解锁${E.TIER_LABEL[next]}（${E.C.rules.tierUnlockCost[next]}）</button></div>`;
   out += filterChips(classFilter, 'cf');
   const list = filterEnts(E.entities('Class'), classFilter).sort((a, b) => (a.tier || 0) - (b.tier || 0) || a.id.localeCompare(b.id));
-  out += list.length ? list.map(entCard).join('') : `<p class="muted">没有。${classFilter === 'mine' ? '点「可加入」挑课堂。' : ''}</p>`;
+  if (!list.length) return out + `<p class="muted">没有。${classFilter === 'mine' ? '点「可加入」挑课堂。' : ''}</p>`;
+  for (const t of [...new Set(list.map(e => e.tier || 0))]) {
+    const ls = list.filter(e => (e.tier || 0) === t);
+    out += `<h3>${E.TIER_LABEL[t]} <span class="muted small">${ls.length}</span></h3>` + grid(ls.map(e => classTile(e, false)));
+  }
   return out;
 }
 
@@ -501,46 +525,27 @@ function viewAdv() {
   if (last) out += `<button class="card menu" data-act="gradShow">🎓 已毕业（${new Date(last.at).toLocaleDateString()}）<span>›</span></button>`;
   out += filterChips(advFilter, 'af');
   const list = filterEnts(E.entities('Degree'), advFilter);
-  out += list.length ? list.map(degreeCard).join('') : `<p class="muted">没有。${advFilter === 'mine' ? '点「可加入」挑学位；加入后它的课程和初级课堂会一并加入。' : ''}</p>`;
+  if (!list.length) return out + `<p class="muted">没有。${advFilter === 'mine' ? '点「可加入」挑学位；加入后它的课程和初级课堂会一并加入。' : ''}</p>`;
+  // 在读／已结业的学位摊开课程格；其余学位本身排成格子
+  const big = list.filter(d => E.isMember(d.id) || E.graduated(d.id));
+  const rest = list.filter(d => !big.includes(d));
+  out += big.map(degreeCard).join('');
+  if (rest.length) out += (big.length ? `<h3>其他学位</h3>` : '') + grid(rest.map(d => tile(d.id, { sub: `课程 ${E.degreeCourses(d.id).length} 门` })));
   return out;
 }
 
 function degreeCard(d) {
-  const joined = E.isMember(d.id), done = E.graduated(d.id);
-  const cs = E.degreeCourses(d.id);
-  const st = done ? `<i class="pill ok">已结业 ${E.S.enrolled[d.id].grade || ''}</i>` : joined ? `<i class="pill act">在读</i>` : '';
-  let body = '';
-  if (joined || done) {
-    const lock = E.examLock(d.id);
-    body = cs.map(courseRow).join('') + `<div class="crow" data-act="ent" data-id="${d.id}"><div class="row between"><b>学位考试</b>${done ? `<i class="pill ok">已完成</i>` : lock ? `<i class="pill">${lock}</i>` : `<i class="pill warn">可考试</i>`}</div></div>`;
-  }
+  const cs = E.degreeCourses(d.id), done = E.graduated(d.id), lock = E.examLock(d.id);
   return `<div class="card">
     <div class="ent" data-act="ent" data-id="${d.id}">
       ${pic(d.id, 'r34 thumb')}
       <div class="grow">
-        <div class="row between"><b>${esc(d.name)}</b>${st}</div>
-        <div class="muted small">课程 ${cs.filter(E.graduated).length}／${cs.length}</div>
-        ${joined || done ? '' : `<div class="small clamp">${esc(d.description || '')}</div>`}
+        <div class="row between"><b>${esc(d.name)}</b>${statusPill(d.id)}</div>
+        <div class="muted small">课程 ${cs.filter(E.graduated).length}／${cs.length}｜点课程看说明和任务</div>
       </div>
-    </div>${body}
-  </div>`;
-}
-
-function courseRow(cid) {
-  const c = E.C.ent[cid];
-  const steps = E.courseClasses(cid).map(k => {
-    const t = E.C.ent[k].tier || 0, ok = E.graduated(k);
-    return `<button class="pill ${ok ? 'ok' : E.isMember(k) ? 'act' : ''}" data-act="ent" data-id="${k}">${E.TIER_LABEL[t]}${ok ? ' ' + (E.S.enrolled[k].grade || '✓') : ''}</button>`;
-  }).join('<span class="muted">›</span>');
-  const st = E.graduated(cid) ? `<i class="pill ok">已结业 ${E.S.enrolled[cid].grade || ''}</i>`
-    : !E.isMember(cid) ? `<i class="pill">未加入</i>`
-    : E.examLock(cid) ? `<i class="pill">考试未开</i>` : `<i class="pill warn">可考试</i>`;
-  return `<div class="crow" data-act="ent" data-id="${cid}">
-    <div class="ent">${pic(cid, 'r34 cpic')}
-      <div class="grow"><div class="row between top-al"><b>${esc(c.name)}</b>${st}</div>
-      <div class="small clamp l4">${esc(c.description || '')}</div></div>
     </div>
-    <div class="row steps">${steps}<span class="muted">›</span><i class="pill ${E.graduated(cid) ? 'ok' : ''}">考试</i></div>
+    ${grid(cs.map(courseTile))}
+    <div class="crow" data-act="ent" data-id="${d.id}"><div class="row between"><b>学位考试</b>${done ? `<i class="pill ok">已完成</i>` : lock ? `<i class="pill">${lock}</i>` : `<i class="pill warn">可考试</i>`}</div></div>
   </div>`;
 }
 
@@ -627,15 +632,21 @@ function perkText(m) {
 }
 
 function viewClubs() {
-  return `<h3>社团</h3>` + E.entities('Club').map(e => {
-    const on = !!E.S.clubs[e.id];
-    return `<div class="card">
-      <div class="row between"><b>${esc(e.name)}</b><button class="btn small ${on ? 'ghost' : 'primary'}" data-act="${on ? 'leave' : 'join'}" data-id="${e.id}">${on ? '退出' : '加入'}</button></div>
-      <div class="small">${esc(e.description || '')}</div>
-      ${on ? Object.values(e.modifiers || {}).map(m => `<label class="toggle"><input type="checkbox" data-perk="${e.id}|${m.id}" ${E.S.clubs[e.id].perks?.[m.id] ? 'checked' : ''}><span>${perkText(m)}</span></label>`).join('') : ''}
-      ${on ? Object.keys(e.tasks || {}).filter(t => E.S.clubs[e.id].perks?.[e.tasks[t].perkId]).map(t => taskCard(E.view(e.id, t), { showEnt: false })).join('') : ''}
-    </div>`;
-  }).join('');
+  const cs = E.entities('Club');
+  const sub = e => { const c = E.S.clubs[e.id]; if (!c) return ''; const ms = Object.keys(e.modifiers || {}); return `福利开 ${ms.filter(m => c.perks?.[m]).length}／${ms.length}`; };
+  return `<h3>社团 <span class="muted small">${cs.length}</span></h3><p class="muted small">点开看福利、加入或退出；福利在里面逐项开关。</p>` + grid(cs.map(e => tile(e.id, { sub: sub(e) })));
+}
+
+// 社团详情：福利逐项开关，开了的福利带的任务接在底下
+function clubBody(id) {
+  const e = E.C.ent[id], c = E.S.clubs[id];
+  const mods = Object.values(e.modifiers || {});
+  if (!mods.length) return '';
+  return `<h3>福利</h3>` + mods.map(m => {
+    if (!c) return `<div class="modline">· ${perkText(m)}</div>`;
+    const ts = c.perks?.[m.id] ? Object.keys(e.tasks || {}).filter(t => e.tasks[t].perkId === m.id).map(t => taskCard(E.view(id, t), { showEnt: false })).join('') : '';
+    return `<label class="toggle"><input type="checkbox" data-perk="${id}|${m.id}" ${c.perks?.[m.id] ? 'checked' : ''}><span>${perkText(m)}</span></label>${ts}`;
+  }).join('') + (c ? '' : `<p class="muted small">加入后可以逐项开关福利。</p>`);
 }
 
 function viewItems() {
@@ -644,7 +655,9 @@ function viewItems() {
   const top = Math.max(0, ...Object.values(st));
   const rate = 1 + Math.floor(top / E.C.rules.outfitStep) * E.C.rules.outfitRate;
   let out = `<div class="card"><b>目前穿着</b>：${Object.entries(st).map(([k, v]) => `${esc(E.C.stats[k] || k)} ${v}`).join('，') || '无'}<div class="muted small">课堂学分加成 ×${rate}（看最高一项，每 ${E.C.rules.outfitStep} 点 +${E.C.rules.outfitRate * 100}%）</div></div>
-    <p class="muted small">勾「有」＝你手上有这件；勾「穿」＝现在穿着／戴着。</p>`;
+    <p class="muted small">勾「有」＝你手上有这件；勾「穿」＝现在穿着／戴着。同一部位只能穿一件，穿上新的会自动换下旧的（化妆、配件、玩具可叠）。</p>`;
+  const cl = E.wearClashes();
+  if (cl.length) out += `<div class="notice">这几组是同部位、却同时勾了「穿」，取消其中一件：${cl.map(p => p.map(k => esc(E.C.items[k].name)).join('／')).join('；')}</div>`;
   const groups = {};
   for (const it of Object.values(E.C.items)) {
     if (!E.itemVisible(it.id, vis)) continue;
@@ -653,13 +666,13 @@ function viewItems() {
   }
   for (const [loc, list] of Object.entries(groups)) {
     out += `<h3>${esc(E.C.locations[loc] || loc)}</h3>`;
-    out += list.map(it => `<div class="card item">
+    out += list.map(it => { const sl = E.slotText(it.id); return `<div class="card item">
       ${pic(it.id, 'r11 thumb')}
-      <div class="grow"><b>${esc(it.name)}</b><div class="muted small">${esc(it.description || '')}</div>
+      <div class="grow"><b>${esc(it.name)}</b>${sl ? ` <i class="pill">${esc(sl)}</i>` : ''}<div class="muted small">${esc(it.description || '')}</div>
       <div class="muted small">${Object.entries(it.stats || {}).map(([k, v]) => esc(E.C.stats[k] || k) + ' ' + v).join('，')}</div></div>
       <div class="col"><label><input type="checkbox" data-own="${it.id}" ${E.S.owned[it.id] ? 'checked' : ''}>有</label>
       <label><input type="checkbox" data-wear="${it.id}" ${E.S.wearing[it.id] ? 'checked' : ''} ${E.S.owned[it.id] ? '' : 'disabled'}>穿</label></div>
-    </div>`).join('');
+    </div>`; }).join('');
   }
   return out;
 }
@@ -729,6 +742,9 @@ function viewEnt(id) {
   const S = E.S;
   const btns = [];
   if (e.type === 'Punishment') { }
+  else if (e.type === 'Club') {
+    btns.push(E.isMember(id) ? `<span class="pill ok">已加入</span><button class="btn ghost" data-act="leave" data-id="${id}">退出</button>` : `<button class="btn primary" data-act="join" data-id="${id}">加入</button>`);
+  }
   else if (E.isMember(id)) {
     if (e.type === 'Class') btns.push(`<span class="pill ok">${E.classDayOk(id) ? '已出席' : '今天不排课'}</span>`);
     if (E.canGraduate(id)) btns.push(`<button class="btn primary" data-act="graduate" data-id="${id}">结业</button>`);
@@ -760,8 +776,14 @@ function viewEnt(id) {
     pre = e.type === 'Course' ? E.courseClasses(id) : E.degreeCourses(id);
   }
   if (e.type === 'Punishment') info = `<div class="muted small">${E.PUN_TIER_LABEL[e.tier]}惩罚｜领到后重抽 ${E.C.rules.punRerollCost[e.tier - 1]} 学分、放弃扣 ${E.C.rules.punAbandonCost[e.tier - 1]} 学分</div>`;
+  if (e.type === 'Club') info = `<div class="muted small">福利 ${Object.keys(e.modifiers || {}).length} 项｜退出不扣学分</div>`;
   if (e.type === 'Class' && E.nextClass(id)) info += `<div class="muted small">下一程度：${esc(E.C.ent[E.nextClass(id)].name)}</div>`;
-  const tops = E.topTasks(id);
+  // 课程／学位底下的课堂／课程用拼图；课堂的先修仍用小标签
+  const sub = (e.type === 'Course' || e.type === 'Degree') && pre.length
+    ? `<h3>${e.type === 'Course' ? '课堂' : '课程'}</h3>` + grid(pre.map(p => e.type === 'Course' ? classTile(E.C.ent[p]) : courseTile(p)))
+    : '';
+  if (e.type === 'Course' || e.type === 'Degree') pre = [];
+  const tops = e.type === 'Club' ? [] : E.topTasks(id);
   const tasks = tops.map(t => {
     const v = E.view(id, t.id);
     let html = taskCard(v, { showEnt: false });
@@ -779,7 +801,8 @@ function viewEnt(id) {
     <p>${esc(e.description || '')}</p>
     ${pre.length ? `<div class="small">${e.type === 'Class' ? '先修' : e.type === 'Course' ? '课堂' : '课程'}：${pre.map(p => `<button class="pill ${E.graduated(p) ? 'ok' : E.isMember(p) ? 'act' : ''}" data-act="ent" data-id="${p}">${esc(E.C.ent[p].name)}${E.C.ent[p].type === 'Class' ? '（' + E.TIER_LABEL[E.C.ent[p].tier || 0] + '）' : ''}</button>`).join(' ')}</div>` : ''}
     <div class="row gap wrap">${btns.join('')}</div>
-    <h3>任务</h3>${tasks || '<p class="muted">没有任务</p>'}`;
+    ${sub}
+    ${e.type === 'Club' ? clubBody(id) : `<h3>任务</h3>${tasks || '<p class="muted">没有任务</p>'}`}`;
 }
 
 // ———————————————— 绘制 ————————————————
@@ -877,10 +900,14 @@ async function showHypno(rid) {
   const affs = E.C.affirmations || [], byN = new Map(affs.map(a => [a.n, a.id]));
   const allImgs = Object.keys(imgIdx).filter(k => k.startsWith('hyp_')), imgs = {};
   for (const k of allImgs) { const id = byN.get(parseInt(k.slice(4))); if (id) (imgs[id] ||= []).push(k); }
+  // 图生视频 hypm_<句号><版本>：和图同名，有视频的图就放视频
+  const vids = new Set(allImgs.filter(k => imgIdx['hypm_' + k.slice(4)]));
+  // 长视频片段 hypc_<片段名>（T1…T9 变身、A<k>in／loop／out 动作）
+  const chain = new Set(Object.keys(imgIdx).filter(k => k.startsWith('hypc_')).map(k => k.slice(5)));
   // 还没配到图的句子（如第 83 句）先不念，等图补进包里自动加入；包里完全没催眠图时照旧全念
   const lines = allImgs.length ? affs.filter(a => imgs[a.id]) : affs;
   gameStop = openHypno(g, {
-    lines, imgs, allImgs, voice: H.voice || [],
+    lines, imgs, allImgs, vids, chain, voice: H.voice || [],
     tags: r.tags || [], video: hy.video, punish: hy.punish, open: hy.open, sec: hy.sec,
     lang: E.S.settings.affLang || 'zh', setLang: l => { E.S.settings.affLang = l; save(); },
     rem: () => E.runById(rid) ? E.remaining(r) : 0,
@@ -893,6 +920,8 @@ async function showHypno(rid) {
       try { const b = await Vt.getBytes('aud:' + key); return b ? b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) : null; } catch { return null; }
     },
     image: imgUrl,
+    movie: k => imgUrl('hypm_' + k.slice(4)),
+    clip: k => imgUrl('hypc_' + k),
     onDone: () => { closeGame(true); finishRun(rid); },
     onClose: () => closeGame(true)
   });
@@ -1218,7 +1247,11 @@ document.addEventListener('change', e => {
     render(); return;
   }
   if (t.dataset.own) { E.S.owned[t.dataset.own] = t.checked; if (!t.checked) delete E.S.wearing[t.dataset.own]; refresh(); return; }
-  if (t.dataset.wear) { E.S.wearing[t.dataset.wear] = t.checked; refresh(); return; }
+  if (t.dataset.wear) {
+    const off = E.wear(t.dataset.wear, t.checked);
+    if (off.length) toast('同部位，已换下：' + off.map(k => E.C.items[k]?.name || k).join('、'), 3500);
+    refresh(); return;
+  }
   if (t.dataset.perk) { const [c, m] = t.dataset.perk.split('|'); E.togglePerk(c, m, t.checked); refresh(); return; }
   if (t.dataset.ph && screen === 'app') { readPh(); save(); return; }
   if (t.dataset.set) {
