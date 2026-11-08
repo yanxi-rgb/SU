@@ -3,7 +3,7 @@ import * as E from './engine.js';
 import { openGame } from './minigame.js';
 import { openHypno } from './hypno.js';
 
-const APP_VER = '1.3.9';
+const APP_VER = '1.3.11';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const app = () => $('#app');
@@ -141,21 +141,22 @@ const confirmBox = async (msg, ok = '确定', cls = 'primary') => (await dialog(
 
 const pic = (id, cls = 'r34') => `<div class="pic ${cls}" data-img="${esc(id)}">${imgIdx[id] ? '' : `<span>${esc(id)}</span>`}</div>`;
 
-async function hydrateImages(root = document) {
+// 图片到了屏幕附近才解密（课堂页一百多张，一次全解太慢）
+let imgIO = null;
+function hydrateImages(root = document) {
+  imgIO ||= new IntersectionObserver(es => {
+    for (const e of es) {
+      if (!e.isIntersecting) continue;
+      imgIO.unobserve(e.target);
+      imgUrl(e.target.dataset.img).then(u => { if (u) e.target.innerHTML = `<img src="${u}" alt="">`; });
+    }
+  }, { rootMargin: '600px 0px' });
   for (const n of root.querySelectorAll('[data-img]')) {
     const id = n.dataset.img;
     if (!imgIdx[id] || n.dataset.done) continue;
     n.dataset.done = '1';
-    let url = imgUrls.get(id);
-    if (!url) {
-      try {
-        const b = await Vt.getBytes('img:' + id);
-        if (!b) continue;
-        url = URL.createObjectURL(new Blob([b], { type: imgIdx[id] }));
-        imgUrls.set(id, url);
-      } catch { continue; }
-    }
-    n.innerHTML = `<img src="${url}" alt="">`;
+    const u = imgUrls.get(id);
+    if (u) n.innerHTML = `<img src="${u}" alt="">`; else imgIO.observe(n);
   }
 }
 function dropImageUrls() {
@@ -480,7 +481,8 @@ function tile(id, { badge = statusPill(id), sub = '', extra = '', dim = false } 
 function classTile(e, withTier = true) {
   const bits = [];
   if (withTier) bits.push(E.TIER_LABEL[e.tier || 0]);
-  if (e.days?.length) bits.push('周' + e.days.map(d => E.WEEK[d]).join(''));
+  const ds = (e.days || []).filter(d => E.WEEK[d]);
+  if (ds.length) bits.push('周' + ds.map(d => E.WEEK[d]).join(''));
   if (E.isMember(e.id)) { const g = E.gradeInfo(e.id); bits.push(g.done + '／' + g.total); }
   return tile(e.id, { sub: bits.join('｜'), dim: !E.isMember(e.id) && !E.graduated(e.id) && !E.tierOk(e.id) });
 }
@@ -583,19 +585,16 @@ function viewPun() {
   if (max) out += `<div class="row gap"><button class="btn ghost" data-act="punSelf">自愿领一项</button></div>`;
   // 惩罚一览：领到之前就能看图和做法
   const all = E.entities('Punishment');
-  out += `<h3>惩罚一览 <span class="muted small">${all.length} 项</span></h3><p class="muted small">点开看图和完整做法。领惩罚时从目前上限那一级里抽。</p>`;
+  out += `<h3>惩罚一览 <span class="muted small">${all.length} 项</span></h3><p class="muted small">点开看图和完整做法。领惩罚时从目前上限那一级里抽；灰的是还没开放的等级。</p>`;
   for (const t of [1, 2, 3]) {
     const list = all.filter(e => e.tier === t);
-    if (list.length) out += `<div class="card">${fold('pun:' + t, `${E.PUN_TIER_LABEL[t]} ${list.length} 项${t > max ? '（还没开放）' : t === max ? '（目前从这级抽）' : ''}`, () => list.map(punRow).join(''))}</div>`;
+    if (list.length) out += `<div class="card">${fold('pun:' + t, `${E.PUN_TIER_LABEL[t]} ${list.length} 项${t > max ? '（还没开放）' : t === max ? '（目前从这级抽）' : ''}`, () => grid(list.map(e => punTile(e, t > max))))}</div>`;
   }
   return out;
 }
 
-function punRow(e) {
-  const t = E.topTasks(e.id)[0];
-  const txt = t ? E.renderView(E.view(e.id, t.id)).text.replace(/<[^>]+>/g, '') : '';
-  return `<div class="crow"><div class="ent" data-act="ent" data-id="${e.id}">${pic(e.id, 'r34 thumb')}<div class="grow"><b>${esc(e.name)}</b><div class="small clamp l4">${esc(txt)}</div></div></div></div>`;
-}
+// 惩罚格：待做的标「待做」；做法摘要不放格子里，点开看
+const punTile = (e, dim) => tile(e.id, { badge: E.S.puns.some(p => p.ent === e.id) ? `<i class="pill warn">待做</i>` : '', dim });
 
 // —— 更多 ——
 
@@ -619,7 +618,7 @@ function viewMore() {
 }
 
 function perkText(m) {
-  if (m.description) return E.render(m.description);
+  if (m.description) return E.render(m.description, E.applyParams(m.params || {}, 1));
   const out = [];
   for (const f of m.effects || []) {
     if (f.type === 'inventory') out.push((f.operation === 'show' ? '解锁专属物品 ' : '隐藏物品 ') + (f.itemIds || []).length + ' 件');
@@ -725,7 +724,7 @@ function viewData() {
     <p class="muted small">备份文件用你另设的口令加密。换手机或清掉浏览器资料前先备份。</p>
     <button class="btn wide primary" data-act="backup">导出备份</button>
     <h3>导入</h3>
-    <p class="muted small">同一个按钮可导入：内容包（pack.bin）、图片包（images.bin）、备份。会自动认出种类。</p>
+    <p class="muted small">同一个按钮可导入：内容包（pack.bin）、新增包（pack_add_*.bin）、图片包、备份，会自动认出种类。导入是累加的，旧图会留着；新增包可一次选多个，照文件名顺序导。</p>
     <button class="btn wide" data-act="pick">选择 .bin 文件</button>
     <p class="muted small" id="impmsg"></p>
     <h3>图片</h3>
@@ -765,7 +764,7 @@ function viewEnt(id) {
   let info = '';
   if (e.type === 'Class') {
     const g = E.gradeInfo(id);
-    info = `<div class="muted small">${E.TIER_LABEL[e.tier || 0]}｜每任务基础 ${E.va(e.tier)} 学分｜考试 ×${E.C.rules.examMult}${e.days?.length ? '｜排在周' + e.days.map(d => E.WEEK[d]).join('、') : ''}</div>
+    info = `<div class="muted small">${E.TIER_LABEL[e.tier || 0]}｜每任务基础 ${E.va(e.tier)} 学分｜考试 ×${E.C.rules.examMult}${e.days?.some(d => E.WEEK[d]) ? '｜排在周' + e.days.filter(d => E.WEEK[d]).map(d => E.WEEK[d]).join('、') : ''}</div>
       ${E.isMember(id) ? `<div class="muted small">进度 ${g.done}／${g.total}，目前成绩 ${g.grade}。全部做完＝A；或做完考试即可结业。</div>` : ''}`;
   }
   if (e.type === 'Course' || e.type === 'Degree') {
@@ -820,6 +819,7 @@ function render() {
   app().className = screen === 'app' ? 'shell' : '';
   const m2 = $('#main');
   if (m2) m2.scrollTop = scrollMem[tab + more] || 0;
+  imgIO?.disconnect();
   renderSheet();
   hydrateImages();
   const pin = $('#pin') || $('#pin1');
@@ -1175,17 +1175,38 @@ function readPh() {
   }
 }
 
-async function importFile(file) {
+async function importFiles(list) {
   const msg = t => { const m = $('#impmsg'); if (m) m.textContent = t; };
   const { value, data } = await dialog({ title: '输入口令', fields: [{ label: '打包／备份时设的口令', type: 'password' }] });
   if (!value) return;
+  // 照文件名排：pack.bin 在 pack_add_月日-时分秒.bin 之前，新增包按时间先后
+  const files = [...list].sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
+  const sum = { ni: 0, na: 0, ok: 0 };
+  for (const [i, f] of files.entries()) {
+    const pre = files.length > 1 ? `（${i + 1}／${files.length}）${f.name}：` : '';
+    const r = await importOne(f, data[0], t => msg(pre + t));
+    if (!r) break;
+    sum.ni += r.ni; sum.na += r.na; sum.ok++;
+  }
+  if (files.length > 1 && sum.ok) toast(`导入 ${sum.ok}／${files.length} 个文件：图片／视频 ${sum.ni}，语音 ${sum.na}`, 4000);
+  if (sum.ok === files.length) msg('');
+  if (screen === 'import') {
+    if (!E.C) { msg('请先导入内容包'); return; }
+    screen = E.S.onboarded ? 'app' : 'ask';
+  }
+  refresh();
+}
+
+// 导一个文件；失败回 null（错误已显示）
+async function importOne(file, pass, msg) {
   msg('解密中…');
   let res;
-  try { res = await Vt.openFile(await file.arrayBuffer(), data[0]); }
-  catch (err) { msg(err.message); toast(err.message); return; }
+  try { res = await Vt.openFile(await file.arrayBuffer(), pass); }
+  catch (err) { msg(err.message); toast(err.message); return null; }
   const h = res.header;
+  let ni = 0, na = 0;
   if (h.kind === 'backup') {
-    if (E.C && !(await confirmBox('用这份备份<b>取代</b>目前的进度？', '取代', 'danger'))) { msg(''); return; }
+    if (E.C && !(await confirmBox('用这份备份<b>取代</b>目前的进度？', '取代', 'danger'))) { msg('已略过备份'); return null; }
     E.useState(h.state);
     await save(true);
   } else if (h.kind === 'pack' || h.kind === 'images') {
@@ -1194,7 +1215,7 @@ async function importFile(file) {
       await Vt.putJSON('content', h.data);
       E.loadContent(h.data);
     }
-    let n = 0, ni = 0, na = 0;
+    let n = 0;
     for (const f of res.files) {
       msg(`存图片／语音 ${++n}／${res.files.length}…`);
       if (f.type.startsWith('audio/')) {
@@ -1208,14 +1229,9 @@ async function importFile(file) {
     await Vt.putJSON('imgidx', imgIdx);
     if (na) await Vt.putJSON('audidx', audIdx);
     dropImageUrls();
-    toast(h.kind === 'pack' ? `内容包已导入（${h.data.entities.length} 项，图片 ${ni} 张，语音 ${na} 段）` : `图片已导入 ${ni} 张`);
-  } else { msg('不认识的文件'); return; }
-  msg('');
-  if (screen === 'import') {
-    if (!E.C) { msg('请先导入内容包'); return; }
-    screen = E.S.onboarded ? 'app' : 'ask';
-  }
-  refresh();
+    toast(h.kind === 'pack' ? `内容包已导入（${h.data.entities.length} 项，图片／视频 ${ni}，语音 ${na}）` : `图片已导入 ${ni} 张`);
+  } else { msg('不认识的文件'); return null; }
+  return { ni, na };
 }
 
 function doLock() {
@@ -1240,7 +1256,7 @@ document.addEventListener('click', e => {
 document.addEventListener('change', e => {
   const t = e.target;
   if (!E.S) return;
-  if (t.id === 'file') { const f = t.files[0]; t.value = ''; if (f) importFile(f); return; }
+  if (t.id === 'file') { const fs = [...t.files]; t.value = ''; if (fs.length) importFiles(fs); return; }
   if (t.dataset.sel) {
     const v = E.view(t.dataset.e, t.dataset.t, t.dataset.v);
     if (t.checked) sel.set(t.dataset.sel, v); else sel.delete(t.dataset.sel);

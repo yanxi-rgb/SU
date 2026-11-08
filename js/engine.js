@@ -448,7 +448,8 @@ export const isMember = eid => {
 };
 export const graduated = eid => S.enrolled[eid]?.status === 'done';
 // 用户定（2026-10-31）：加入课堂就算出席，不用每天按出席；固定排课时课堂任务只在排定的星期能做
-export const classDayOk = eid => !(S.settings.schedule === 'fixed' && C.ent[eid]?.days?.length && !C.ent[eid].days.includes(weekday(dayKey())));
+// days 里的 0 是原站「不限星期」，只认 1～7
+export const classDayOk = eid => { const ds = (C.ent[eid]?.days || []).filter(d => d >= 1 && d <= 7); return !(S.settings.schedule === 'fixed' && ds.length && !ds.includes(weekday(dayKey()))); };
 
 // 原站结构：学位 →（先修）课程 →（先修）专家课堂 → 高级 → 中级 → 初级
 // 课堂才看先修；课程、学位随时可加入，先修只挡考试
