@@ -595,6 +595,8 @@ export function check(V, { ignoreConflicts = false, extra = [], practice = false
   if (e.isSequential && !V.parentId && !prac) {
     const next = topTasks(V.eid).find(t => !doneEver(V.eid + ':' + t.id));
     if (next && next.id !== V.tid) why.push('要按顺序做');
+    // 自制的月份课（onePerDay）：一天只做一天的份
+    if (e.onePerDay && topTasks(V.eid).some(t => t.id !== V.tid && doneToday(V.eid + ':' + t.id))) why.push('一天只做一天的份，明天再来');
   }
   if (V.parentId) {
     const pr = runOf(V.eid + ':' + V.parentId);

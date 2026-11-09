@@ -3,7 +3,7 @@ import * as E from './engine.js';
 import { openGame } from './minigame.js';
 import { openHypno } from './hypno.js';
 
-const APP_VER = '1.3.11';
+const APP_VER = '1.3.12';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const app = () => $('#app');
@@ -484,8 +484,13 @@ function classTile(e, withTier = true) {
   const ds = (e.days || []).filter(d => E.WEEK[d]);
   if (ds.length) bits.push('周' + ds.map(d => E.WEEK[d]).join(''));
   if (E.isMember(e.id)) { const g = E.gradeInfo(e.id); bits.push(g.done + '／' + g.total); }
-  return tile(e.id, { sub: bits.join('｜'), dim: !E.isMember(e.id) && !E.graduated(e.id) && !E.tierOk(e.id) });
+  const now = monthOf(e) && monthOf(e) === new Date().getMonth() + 1;  // 只是提示，哪个月都能加入
+  return tile(e.id, { badge: (now ? '<i class="pill warn">本月</i>' : '') + statusPill(e.id),
+    sub: bits.join('｜'), dim: !E.isMember(e.id) && !E.graduated(e.id) && !E.tierOk(e.id) });
 }
+// 月份课：自制课程带 month，原站 Locktober 算十月；排序时从本月起往后数
+const monthOf = e => e.month || (/^CLASS_LOCKTOBER_/.test(e.id) ? 10 : 0);
+const monthRank = e => { const m = monthOf(e); return m ? (m - 1 - new Date().getMonth() + 12) % 12 : 99; };
 
 // 课程格：底下一排「初中高专考」看进度（绿＝结业、蓝＝在读）
 function courseTile(cid) {
@@ -508,7 +513,7 @@ function viewClasses() {
   let out = '';
   if (next <= 4) out += `<div class="row between card"><span>已解锁到 <b>${E.TIER_LABEL[E.S.tier]}</b></span><button class="btn small" data-act="unlockTier">解锁${E.TIER_LABEL[next]}（${E.C.rules.tierUnlockCost[next]}）</button></div>`;
   out += filterChips(classFilter, 'cf');
-  const list = filterEnts(E.entities('Class'), classFilter).sort((a, b) => (a.tier || 0) - (b.tier || 0) || a.id.localeCompare(b.id));
+  const list = filterEnts(E.entities('Class'), classFilter).sort((a, b) => (a.tier || 0) - (b.tier || 0) || monthRank(a) - monthRank(b) || a.id.localeCompare(b.id));
   if (!list.length) return out + `<p class="muted">没有。${classFilter === 'mine' ? '点「可加入」挑课堂。' : ''}</p>`;
   for (const t of [...new Set(list.map(e => e.tier || 0))]) {
     const ls = list.filter(e => (e.tier || 0) === t);
