@@ -3,7 +3,7 @@ import * as E from './engine.js';
 import { openGame } from './minigame.js';
 import { openHypno } from './hypno.js';
 
-const APP_VER = '1.3.12';
+const APP_VER = '1.3.13';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const app = () => $('#app');
@@ -12,6 +12,7 @@ let screen = 'boot';
 let tab = 'home';
 let more = 'menu';
 let classFilter = 'mine';
+let monthFilter = 'all';
 let advFilter = 'mine';
 let showGrad = false;
 let openKids = new Set();     // 展开的细则
@@ -239,13 +240,14 @@ function viewAsk() {
 
 // ———————————————— 主画面 ————————————————
 
-const TABS = [['home', '首页'], ['adv', '学位'], ['class', '课堂'], ['pun', '惩罚'], ['more', '更多']];
+const TABS = [['home', '首页'], ['adv', '学位'], ['month', '月份'], ['class', '课堂'], ['pun', '惩罚'], ['more', '更多']];
 
 function viewApp() {
   const pc = E.S.puns.length;
   let body = '';
   if (tab === 'home') body = viewHome();
   if (tab === 'class') body = viewClasses();
+  if (tab === 'month') body = viewMonths();
   if (tab === 'adv') body = viewAdv();
   if (tab === 'pun') body = viewPun();
   if (tab === 'more') body = viewMore();
@@ -513,11 +515,27 @@ function viewClasses() {
   let out = '';
   if (next <= 4) out += `<div class="row between card"><span>已解锁到 <b>${E.TIER_LABEL[E.S.tier]}</b></span><button class="btn small" data-act="unlockTier">解锁${E.TIER_LABEL[next]}（${E.C.rules.tierUnlockCost[next]}）</button></div>`;
   out += filterChips(classFilter, 'cf');
-  const list = filterEnts(E.entities('Class'), classFilter).sort((a, b) => (a.tier || 0) - (b.tier || 0) || monthRank(a) - monthRank(b) || a.id.localeCompare(b.id));
+  const list = filterEnts(E.entities('Class').filter(e => !monthOf(e)), classFilter).sort((a, b) => (a.tier || 0) - (b.tier || 0) || monthRank(a) - monthRank(b) || a.id.localeCompare(b.id));
   if (!list.length) return out + `<p class="muted">没有。${classFilter === 'mine' ? '点「可加入」挑课堂。' : ''}</p>`;
   for (const t of [...new Set(list.map(e => e.tier || 0))]) {
     const ls = list.filter(e => (e.tier || 0) === t);
     out += `<h3>${E.TIER_LABEL[t]} <span class="muted small">${ls.length}</span></h3>` + grid(ls.map(e => classTile(e, false)));
+  }
+  return out;
+}
+
+// —— 月份课：独立一栏（用户 2026-11-14「月份课程能另外一个栏吗？就像学位一样」），从本月排起，每月主课在前、两门副课在后
+const MONTH_CN = ['', '一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
+const isMainMonth = e => /^CLASS_[A-Z]+$/.test(e.id) || e.id === 'CLASS_LOCKTOBER_CHASTITY';
+
+function viewMonths() {
+  let out = filterChips(monthFilter, 'mf');
+  const list = filterEnts(E.entities('Class').filter(e => monthOf(e)), monthFilter)
+    .sort((a, b) => monthRank(a) - monthRank(b) || isMainMonth(b) - isMainMonth(a) || a.id.localeCompare(b.id));
+  if (!list.length) return out + `<p class="muted">没有。${monthFilter === 'mine' ? '点「全部」挑这个月的课。' : ''}</p>`;
+  for (const m of [...new Set(list.map(monthOf))]) {
+    const ls = list.filter(e => monthOf(e) === m);
+    out += `<h3>${MONTH_CN[m]}</h3>` + grid(ls.map(e => classTile(e, false)));
   }
   return out;
 }
@@ -1008,6 +1026,7 @@ const ACT = {
   checkUpd() { checkUpdate(); },
   applyUpd() { applyUpdate(); },
   cf(d) { classFilter = d.k; render(); },
+  mf(d) { monthFilter = d.k; render(); },
   af(d) { advFilter = d.k; render(); },
   back() { history.back(); },
   ent(d) { openSheet({ kind: 'ent', id: d.id }); },
