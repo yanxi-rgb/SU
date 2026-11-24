@@ -3,7 +3,7 @@ import * as E from './engine.js';
 import { openGame } from './minigame.js';
 import { openHypno } from './hypno.js';
 
-const APP_VER = '1.3.13';
+const APP_VER = '1.3.14';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const app = () => $('#app');
@@ -292,7 +292,9 @@ function viewHome() {
   const pend = S.puns.filter(p => !p.rid);
   if (pend.length) out += `<div class="notice" data-act="tab" data-k="pun">${pend.length} 项惩罚待做，每项会扣完成任务时的学分 →</div>`;
   // 可开始
-  const list = E.startableNow(v => !v.parentId);
+  // 做过的（课堂／课程／学位）不再自动列出：要重复当练习，去该课堂里找（用户 2026-11-23）；月份课从本月排起
+  const list = E.startableNow(v => !v.parentId && !(['Class', 'Course', 'Degree'].includes(v.entType) && E.doneEver(v.key)))
+    .sort((a, b) => (monthOf(a.e) ? monthRank(a.e) : -1) - (monthOf(b.e) ? monthRank(b.e) : -1));
   out += `<h3>现在可以开始 <span class="muted small">${list.length} 项</span></h3>`;
   if (!list.length) out += `<p class="muted">没有。去「课堂」加入课堂。</p>`;
   else {
