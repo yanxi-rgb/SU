@@ -86,6 +86,11 @@ input.sel { width: 20px; height: 20px; margin: 0 4px 0 0; accent-color: var(--ac
 .pic.r11 { aspect-ratio: 1; }
 .pic.thumb { width: 64px; }
 .pic.hero { width: 120px; }
+.pic img { cursor: zoom-in; }
+[data-act] .pic img { cursor: inherit; }
+#zoom { position: fixed; inset: 0; background: #000; z-index: 55; display: flex; align-items: center; justify-content: center; animation: zoomin .15s ease-out; }
+#zoom img { width: 100%; height: 100%; object-fit: contain; }
+@keyframes zoomin { from { opacity: 0; transform: scale(.92); } }
 /* 拼图格（课堂、课程、学位、社团） */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 10px; margin: 10px 0; }
 .tile { position: relative; border-radius: 12px; overflow: hidden; background: var(--bg2); border: 1px solid var(--line); cursor: pointer; }

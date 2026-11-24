@@ -3,7 +3,7 @@ import * as E from './engine.js';
 import { openGame } from './minigame.js';
 import { openHypno } from './hypno.js';
 
-const APP_VER = '1.3.14';
+const APP_VER = '1.3.15';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const app = () => $('#app');
@@ -865,6 +865,7 @@ function renderSheet() {
 
 function openSheet(s) { sheets.push(s); history.pushState({ sh: sheets.length }, ''); renderSheet(); }
 window.addEventListener('popstate', () => {
+  if ($('#zoom')) { $('#zoom').remove(); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); return; }
   if ($('#game')) { closeGame(); return; }
   if (sheets.length) { sheets.pop(); renderSheet(); }
 });
@@ -1272,7 +1273,20 @@ function doLock() {
 
 // ———————————————— 事件 ————————————————
 
+// 点图放大：不在可点的格子／列里的图（实体页大图、物品图）点了手机全屏看（藏状态栏），点一下或按返回关
+function zoomPic(src) {
+  const z = document.createElement('div');
+  z.id = 'zoom';
+  z.innerHTML = `<img src="${src}" alt="">`;
+  z.onclick = () => history.back();
+  document.body.appendChild(z);
+  history.pushState({ zoom: 1 }, '');
+  if (!document.fullscreenElement) document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }).catch(() => {});
+}
+
 document.addEventListener('click', e => {
+  const im = e.target.closest('.pic img');
+  if (im && !im.closest('[data-act]')) { e.preventDefault(); zoomPic(im.src); return; }
   const a = e.target.closest('[data-act]');
   if (!a || a.disabled) return;
   const f = ACT[a.dataset.act];
