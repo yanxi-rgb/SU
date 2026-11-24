@@ -2,8 +2,9 @@ import * as Vt from './vault.js';
 import * as E from './engine.js';
 import { openGame } from './minigame.js';
 import { openHypno } from './hypno.js';
+import { openReader } from './reader.js';
 
-const APP_VER = '1.3.15';
+const APP_VER = '1.3.16';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const app = () => $('#app');
@@ -24,6 +25,8 @@ let saveTimer = null;
 let imgIdx = {};
 const imgUrls = new Map();
 let audIdx = {};               // 暗示语配音：aff_zh_<id>／aff_en_<id> → MIME
+let novIdx = null;             // 小说包的书目 { version, books:[{id,title,sub,chapters:[{k,no,title,han}]}] }；正文在 nov:nov_<书>_<章>
+let readerStop = null;
 const audUrls = new Map();
 let voiceEl = null, voiceSeq = 0;
 let gameStop = null;
@@ -67,6 +70,7 @@ function save(now = false) {
 async function loadAll() {
   const content = await Vt.getJSON('content');
   imgIdx = (await Vt.getJSON('imgidx')) || {};
+  novIdx = await Vt.getJSON('novidx');
   audIdx = (await Vt.getJSON('audidx')) || {};
   E.useState(await Vt.getJSON('state'));
   E.hooks({ notify });
@@ -625,7 +629,7 @@ const punTile = (e, dim) => tile(e.id, { badge: E.S.puns.some(p => p.ent === e.i
 
 function viewMore() {
   if (more === 'menu') {
-    const items = [['clubs', '社团'], ['items', '物品与服装'], ['inf', '医务室'], ['log', '记录'], ['settings', '设置'], ['data', '备份与内容包']];
+    const items = [['books', '书库'], ['clubs', '社团'], ['items', '物品与服装'], ['inf', '医务室'], ['log', '记录'], ['settings', '设置'], ['data', '备份与内容包']];
     return items.map(([k, l]) => `<button class="card menu" data-act="more" data-k="${k}">${l}<span>›</span></button>`).join('') +
       `<div class="card"><div class="row between"><span>程序版本 <b>${APP_VER}</b></span>${updReady
         ? `<button class="btn small primary" data-act="applyUpd">新版已下载，更新</button>`
@@ -639,6 +643,8 @@ function viewMore() {
   if (more === 'log') return back + `<h3>记录</h3>` + E.S.log.slice(0, 300).map(l => `<div class="logline"><span class="muted small">${new Date(l.t).toLocaleString('zh-CN', { hour12: false })}</span> ${esc(l.msg)}</div>`).join('');
   if (more === 'settings') return back + viewSettings();
   if (more === 'data') return back + viewData();
+  if (more === 'books') return back + viewBooks();
+  if (more.startsWith('book:')) return `<button class="btn ghost small" data-act="more" data-k="books">‹ 书库</button>` + viewBookToc(more.slice(5));
   return '';
 }
 
@@ -749,7 +755,7 @@ function viewData() {
     <p class="muted small">备份文件用你另设的口令加密。换手机或清掉浏览器资料前先备份。</p>
     <button class="btn wide primary" data-act="backup">导出备份</button>
     <h3>导入</h3>
-    <p class="muted small">同一个按钮可导入：内容包（pack.bin）、新增包（pack_add_*.bin）、图片包、备份，会自动认出种类。导入是累加的，旧图会留着；新增包可一次选多个，照文件名顺序导。</p>
+    <p class="muted small">同一个按钮可导入：内容包（pack.bin）、新增包（pack_add_*.bin）、图片包、小说包（novels.bin）、备份，会自动认出种类。导入是累加的，旧图会留着；新增包可一次选多个，照文件名顺序导。</p>
     <button class="btn wide" data-act="pick">选择 .bin 文件</button>
     <p class="muted small" id="impmsg"></p>
     <h3>图片</h3>
@@ -866,9 +872,72 @@ function renderSheet() {
 function openSheet(s) { sheets.push(s); history.pushState({ sh: sheets.length }, ''); renderSheet(); }
 window.addEventListener('popstate', () => {
   if ($('#zoom')) { $('#zoom').remove(); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); return; }
+  if ($('#reader')) { closeReader(); return; }
   if ($('#game')) { closeGame(); return; }
   if (sheets.length) { sheets.pop(); renderSheet(); }
 });
+
+// ———————————————— 书库（小说） ————————————————
+
+const bookOf = id => novIdx?.books.find(b => b.id === id);
+const readOf = id => (E.S.read = E.S.read || {})[id] || (E.S.read[id] = { last: null, chs: {} });
+const wan = n => (n / 10000).toFixed(1) + ' 万字';
+
+function viewBooks() {
+  if (!novIdx?.books?.length) return `<h3>书库</h3><p class="muted">还没导入小说包。在电脑上打 <b>novels.bin</b>，到「备份与内容包」导入。</p>`;
+  return `<h3>书库</h3>` + novIdx.books.map(b => {
+    const rd = readOf(b.id), all = b.chapters.reduce((s, c) => s + c.han, 0);
+    const readHan = b.chapters.reduce((s, c) => s + c.han * Math.min(1, rd.chs[c.k] || 0), 0);
+    const cur = b.chapters.find(c => c.k === rd.last);
+    return `<div class="card book">
+      <div class="row between top-al"><div class="grow"><b>${esc(b.title)}</b><div class="muted small">${esc(b.sub)}・${b.chapters.length} 章・约 ${wan(all)}</div></div></div>
+      <div class="bar"><i style="width:${all ? (readHan / all * 100).toFixed(1) : 0}%"></i></div>
+      <div class="muted small">${cur ? `读到 ${esc(cur.no)}「${esc(cur.title)}」${Math.round((rd.chs[cur.k] || 0) * 100)}%` : '还没开始读'}</div>
+      <div class="row end" style="margin-top:8px"><button class="btn small ghost" data-act="more" data-k="book:${b.id}">目录</button>
+        <button class="btn small primary" data-act="readBook" data-b="${b.id}">${cur ? '继续读' : '从头读'}</button></div>
+    </div>`;
+  }).join('');
+}
+
+function viewBookToc(id) {
+  const b = bookOf(id);
+  if (!b) return `<p class="muted">没有这本书。</p>`;
+  const rd = readOf(id);
+  return `<h3>${esc(b.title)} <span class="muted small">${b.chapters.length} 章</span></h3>` + b.chapters.map(c => {
+    const p = rd.chs[c.k] || 0;
+    return `<button class="chrow ${rd.last === c.k ? 'cur' : ''}" data-act="readBook" data-b="${id}" data-k="${esc(c.k)}"><span class="no">${esc(c.no)}</span><span class="t">${esc(c.title)}</span><span class="c">${(c.han / 1000).toFixed(1)}k${p >= 0.98 ? '・读完' : p > 0 ? '・' + Math.round(p * 100) + '%' : ''}</span></button>`;
+  }).join('');
+}
+
+function openBook(id, k) {
+  const b = bookOf(id);
+  if (!b || $('#reader')) return;
+  const rd = readOf(id);
+  k = k || rd.last || b.chapters[0]?.k;
+  const p = rd.chs[k] || 0;
+  const r = document.createElement('div');
+  r.id = 'reader';
+  document.body.appendChild(r);
+  history.pushState({ reader: 1 }, '');
+  const s = E.S.settings;
+  readerStop = openReader(r, {
+    book: b, k, pos: p >= 0.98 ? 0 : p,
+    settings: { fs: s.rdFs || 20, lh: s.rdLh || 1.95, theme: s.rdTheme || '' },
+    getText: async ck => { const u = await Vt.getBytes('nov:nov_' + id + '_' + ck); return u ? new TextDecoder().decode(u) : null; },
+    progress: ck => rd.chs[ck] || 0,
+    onPos: (ck, ratio) => { rd.last = ck; rd.chs[ck] = Math.max(ratio, rd.chs[ck] >= 0.98 ? rd.chs[ck] : 0); save(); },
+    onSettings: v => { s.rdFs = v.fs; s.rdLh = v.lh; s.rdTheme = v.theme; save(); },
+    onClose: () => closeReader(true)
+  });
+}
+
+function closeReader(viaUi = false) {
+  if (readerStop) readerStop();
+  readerStop = null;
+  $('#reader')?.remove();
+  if (viaUi && history.state?.reader) history.back();
+  if (screen === 'app') render();
+}
 
 function refresh() { save(); render(); }
 
@@ -1026,6 +1095,7 @@ const ACT = {
   lock() { doLock(); },
   tab(d) { tab = d.k; if (tab !== 'more') more = 'menu'; sel.clear(); render(); },
   more(d) { more = d.k; render(); },
+  readBook(d) { openBook(d.b, d.k); },
   checkUpd() { checkUpdate(); },
   applyUpd() { applyUpdate(); },
   cf(d) { classFilter = d.k; render(); },
@@ -1257,11 +1327,22 @@ async function importOne(file, pass, msg) {
     if (na) await Vt.putJSON('audidx', audIdx);
     dropImageUrls();
     toast(h.kind === 'pack' ? `内容包已导入（${h.data.entities.length} 项，图片／视频 ${ni}，语音 ${na}）` : `图片已导入 ${ni} 张`);
+  } else if (h.kind === 'novels') {
+    // 小说包：整套覆盖（书目＋每章正文）；读到哪里存在进度里，不受影响
+    let n = 0;
+    for (const f of res.files) {
+      msg(`存章节 ${++n}／${res.files.length}…`);
+      await Vt.putBytes('nov:' + f.name, f.bytes);
+    }
+    novIdx = { version: h.version, books: h.books };
+    await Vt.putJSON('novidx', novIdx);
+    toast(`小说已导入：${h.books.length} 本、${n} 章`);
   } else { msg('不认识的文件'); return null; }
   return { ni, na };
 }
 
 function doLock() {
+  closeReader();
   save(true);
   closeGame();
   sheets = []; sel.clear();

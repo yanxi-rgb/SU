@@ -1,6 +1,6 @@
 // 离线快取：只缓存程序本身（内容与进度在 IndexedDB，加密）。改版时把 VER 加一。
-const VER = 'pb-1.3.15';
-const SHELL = ['./', 'index.html', 'style.css', 'js/ui.js', 'js/engine.js', 'js/vault.js', 'js/minigame.js', 'js/hypno.js',
+const VER = 'pb-1.3.16';
+const SHELL = ['./', 'index.html', 'style.css', 'js/ui.js', 'js/engine.js', 'js/vault.js', 'js/minigame.js', 'js/hypno.js', 'js/reader.js',
   'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 
 // 安装时绕过浏览器的 HTTP 缓存，免得把旧档装进新版

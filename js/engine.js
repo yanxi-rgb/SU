@@ -73,7 +73,7 @@ export function newState() {
     enrolled: {}, clubs: {}, done: {}, runs: [], mods: [], puns: [],
     checkin: { day: null, streak: 0 }, chastity: { day: null, streak: 0 },
     inf: { day: null, uses: 0, mood: 0 },
-    day: null, seq: 1, log: [], onboarded: false, graduations: []
+    day: null, seq: 1, log: [], onboarded: false, graduations: [], read: {}
   };
 }
 

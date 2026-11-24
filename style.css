@@ -6,7 +6,7 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); }
 body { font: 15px/1.55 system-ui, "Noto Sans SC", "PingFang SC", sans-serif; overscroll-behavior: none; }
-body.veil #app, body.veil #sheet, body.veil #game { visibility: hidden; }
+body.veil #app, body.veil #sheet, body.veil #game, body.veil #reader { visibility: hidden; }
 b { color: #fff; }
 h2 { margin: .3em 0; font-size: 1.3em; }
 h3 { margin: 1.2em 0 .5em; font-size: 1.02em; color: var(--acc); }
@@ -208,3 +208,58 @@ button.pill { border: 0; font-size: .8em; padding: 3px 9px; }
 .hyp-clock { color: #fff; font-variant-numeric: tabular-nums; font-size: 1.1em; }
 .hyp-end { position: absolute; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: rgba(0,0,0,.6); }
 .hyp-end.on { display: flex; }
+
+/* —— 小说阅读器（配色照各书 html：米／白／绿／夜） —— */
+#reader { position: fixed; inset: 0; z-index: 45; display: flex; flex-direction: column;
+  --rbg: #f7f3ea; --rfg: #2b2724; --rmut: #8a8278; --rline: #d9d1c3; --rbar: #efe9dc; --racc: #a0342f;
+  background: var(--rbg); color: var(--rfg); color-scheme: light; }
+#reader[data-theme="paper"] { --rbg: #fbfbf8; --rfg: #1f1f1f; --rmut: #888; --rline: #ddd; --rbar: #f0f0ec; --racc: #a0342f; }
+#reader[data-theme="green"] { --rbg: #e3eddb; --rfg: #26301f; --rmut: #6f7c66; --rline: #c3d1b8; --rbar: #d6e3cc; --racc: #7a3b2a; }
+#reader[data-theme="dark"] { --rbg: #16171a; --rfg: #cfcac2; --rmut: #7d7870; --rline: #2f3035; --rbar: #202125; --racc: #d27a6e; color-scheme: dark; }
+#reader button { font: 14px system-ui, sans-serif; color: var(--rfg); background: transparent; border: 1px solid var(--rline); border-radius: 8px; padding: 6px 11px; }
+#reader button.on { border-color: var(--racc); color: var(--racc); }
+#rd-prog { position: absolute; top: 0; left: 0; height: 3px; width: 0; background: var(--racc); z-index: 3; }
+.rd-bar { position: absolute; top: 0; left: 0; right: 0; z-index: 2; display: flex; align-items: center; gap: 6px; padding: 8px 12px;
+  padding-top: max(8px, env(safe-area-inset-top)); background: var(--rbar); border-bottom: 1px solid var(--rline); transition: transform .25s; }
+.rd-bar.hide { transform: translateY(-110%); }
+.rd-ttl { flex: 1; min-width: 0; font: 13px system-ui, sans-serif; color: var(--rmut); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; }
+.rd-panel { position: absolute; top: 52px; left: 8px; right: 8px; z-index: 2; max-height: 70vh; overflow-y: auto; background: var(--rbar);
+  border: 1px solid var(--rline); border-radius: 12px; padding: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, .25); }
+.rd-panel[hidden] { display: none; }
+.rd-toc { display: flex; flex-direction: column; gap: 4px; }
+.rd-toc button { display: flex; gap: 8px; text-align: left; border: 0 !important; padding: 9px 8px !important; }
+.rd-toc .no { flex: 0 0 4.5em; color: var(--rmut); }
+.rd-toc .t { flex: 1; min-width: 0; }
+.rd-toc .c { color: var(--rmut); font-size: 12px; }
+.rd-toc button.on .t { color: var(--racc); }
+.rd-set div { display: flex; align-items: center; gap: 8px; padding: 6px 4px; font: 14px system-ui, sans-serif; }
+.rd-set span { flex: 0 0 3em; color: var(--rmut); }
+.rd-set b { min-width: 2.6em; text-align: center; color: var(--rfg); }
+.rd-scroll { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.rd-text { max-width: 40em; margin: 0 auto; padding: 72px 18px 48px; font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  font-size: var(--rfs, 20px); line-height: var(--rlh, 1.95); }
+.rd-text b { color: inherit; }
+.rd-text h1 { font-size: 1.35em; text-align: center; margin: .6em 0 1em; line-height: 1.5; font-weight: 600; }
+.rd-text h1 .no { display: block; font-size: .62em; color: var(--racc); letter-spacing: .2em; font-weight: normal; margin-bottom: .3em; }
+.rd-text .meta { text-align: center; color: var(--rmut); font: 12px system-ui, sans-serif; margin: -1em 0 2.4em; }
+.rd-text p { margin: 0 0 .9em; text-indent: 2em; text-align: justify; }
+.rd-text h2 { font-size: 1.1em; text-align: center; margin: 2.2em 0 1.2em; letter-spacing: .2em; color: var(--racc); font-weight: normal; }
+.rd-text .sep { text-align: center; color: var(--rmut); letter-spacing: 1em; margin: 1.6em 0; text-indent: 0; }
+.rd-text .note { text-indent: 0; color: var(--rmut); font-size: .88em; border-left: 3px solid var(--rline); padding-left: .9em; margin-bottom: 2em; }
+.rd-text .end { text-align: center; color: var(--racc); margin-top: 2em; text-indent: 0; }
+.rd-text .todo { text-indent: 0; color: var(--rmut); font-size: .8em; border: 1px dashed var(--rline); border-radius: 8px; padding: .5em .8em; }
+.rd-card { margin: 1.4em auto; max-width: 30em; padding: .7em 1.1em; border: 1px solid var(--rline); border-radius: 12px; background: var(--rbar); }
+.rd-card .msg { margin: .3em 0; text-indent: 0; text-align: left; color: var(--racc); font: .86em/1.7 system-ui, sans-serif; }
+.rd-nav { display: flex; gap: 8px; margin: 3em 0 1em; }
+.rd-nav > * { flex: 1; display: block; padding: 10px 8px !important; border: 1px solid var(--rline); border-radius: 10px; text-align: center; line-height: 1.45; font: 13px system-ui, sans-serif; }
+.rd-nav span { opacity: .35; }
+.rd-nav small { display: block; color: var(--rmut); font-size: 11px; margin-bottom: 2px; }
+.rd-nav .ix { flex: 0 0 4em; }
+/* 书库 */
+.book .bar { height: 4px; background: var(--bg3); border-radius: 2px; margin: 8px 0 4px; overflow: hidden; }
+.book .bar i { display: block; height: 100%; background: var(--acc); }
+.chrow { display: flex; gap: 8px; align-items: baseline; width: 100%; background: none; border: 0; border-bottom: 1px solid var(--line); color: var(--fg); padding: 11px 2px; text-align: left; font-size: .95em; }
+.chrow .no { flex: 0 0 4.6em; color: var(--mut); font-size: .88em; }
+.chrow .t { flex: 1; min-width: 0; }
+.chrow .c { color: var(--mut); font-size: .8em; white-space: nowrap; }
+.chrow.cur .t { color: var(--acc); }
