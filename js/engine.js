@@ -673,6 +673,7 @@ export function start(V, opts = {}) {
   }
   if (MINIGAMES.has(t)) run.game = gameConfig(V, R0);
   run.hypno = hypnoOf(run, R0.durSec);
+  if (!MINIGAMES.has(t) && t !== 'COMPOSITE_TASK' && t !== 'MODIFIER_TASK') run.count = countOf(V, R0.P);
   if (V.parentId) {
     const pr = runOf(V.eid + ':' + V.parentId);
     if (pr) run.parentRid = pr.rid;
@@ -732,6 +733,35 @@ function gameConfig(V, R0) {
   return null;
 }
 
+// 次数任务（文字里「$参数 次／下／遍」，小游戏自己会数的不算）：要按够次数才能完成
+// 一条里可能有好几个（「吸 $times 次、深喉 $deepthroats 次」），各自计；「抽 N 次惩罚」是 App 抽的，不算
+export function countOf(V, P) {
+  const d = V.description || '';
+  const re = /\$([A-Za-z_]\w*)/g;
+  const out = [];
+  let m, last = 0;
+  while ((m = re.exec(d))) {
+    const before = d.slice(last, m.index);
+    last = re.lastIndex;
+    const p = P[m[1]];
+    if (!p || p.dur || !(p.num > 0)) continue;
+    const u = d.slice(re.lastIndex).match(/^\s*(次|下|遍)/);
+    if (!u || /抽(取)?\s*$/.test(before)) continue;
+    // 频率（每分钟 N 次、一秒 N 下、N 次／分钟）不是总数，不计
+    if (/(每|一)\s*(分钟?|秒钟?|小时)[^，。；、\d$]{0,3}\s*$/.test(before) || /^\s*(次|下|遍)\s*(\/|／|每)\s*(分|秒|小时)/.test(d.slice(re.lastIndex))) continue;
+    const lb = (stripTags(before).match(/([一-鿿]{1,4})\s*$/) || [])[1] || '';
+    out.push({ need: Math.round(p.num), done: 0, unit: u[1], label: lb.replace(/^(.*?)(其中|内|再|共)/, '') });
+  }
+  return out.length ? out : null;
+}
+export const countLeft = run => (run.count || []).find(c => c.done < c.need);
+export function bump(rid, k = 1, i = 0) {
+  const c = runById(rid)?.count?.[i];
+  if (!c) return null;
+  c.done = Math.max(0, Math.min(c.need, c.done + k));
+  return c;
+}
+
 // 催眠任务（文字提到催眠的计时／限时任务）：可在 App 里直接播。视频＝有图，音频＝暗屏只有螺旋和字幕
 export function hypnoOf(run, sec) {
   if (run.type !== 'DURATION_TASK' && run.type !== 'TIMED_TASK') return null;
@@ -757,6 +787,8 @@ export function canFinish(run) {
   if (run.game && !run.gameDone) return { ok: false, why: '小游戏还没做完' };
   if (run.type === 'DURATION_TASK' && remaining(run) > 0) return { ok: false, why: '时间还没到' };
   if (run.type === 'TIMED_TASK' && remaining(run) < 0) return { ok: false, why: '已超时' };
+  const cl = countLeft(run);
+  if (cl) return { ok: false, why: `还差 ${cl.need - cl.done} ${cl.unit}${run.count.length > 1 && cl.label ? '（' + cl.label + '）' : ''}` };
   if (run.pausedAt) return { ok: false, why: '暂停中' };
   return { ok: true };
 }

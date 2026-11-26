@@ -4,7 +4,7 @@ import { openGame } from './minigame.js';
 import { openHypno } from './hypno.js';
 import { openReader } from './reader.js';
 
-const APP_VER = '1.3.16';
+const APP_VER = '1.3.17';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const app = () => $('#app');
@@ -409,6 +409,11 @@ function runCard(r) {
   if (r.type === 'DURATION_TASK' && r.durSec) timer = `<div class="timer ${rem <= 0 ? 'due' : ''}" data-timer="${r.rid}">${rem > 0 ? E.fmtClock(rem) : '时间到'}</div>`;
   else if (r.limitSec) timer = `<div class="timer ${rem < 0 ? 'due' : ''}" data-timer="${r.rid}">${E.fmtClock(rem)}</div><div class="muted small">剩余时限</div>`;
   else if (r.type !== 'MODIFIER_TASK') timer = `<div class="timer soft" data-elapsed="${r.rid}">${E.fmtClock(E.elapsed(r))}</div>`;
+  const many = (r.count || []).length > 1;
+  const counter = (r.count || []).map((c, i) => `<div class="counter">
+      <button class="cnt-tap ${c.done >= c.need ? 'full' : ''}" data-act="cnt" data-r="${r.rid}" data-i="${i}">${many && c.label ? esc(c.label) + ' ' : ''}<b data-cnt="${r.rid}_${i}">${c.done}</b>／${c.need} ${c.unit}<i>${c.done >= c.need ? '够数了' : '做一' + c.unit + '点一下'}</i></button>
+      <button class="btn ghost" data-act="cntDown" data-r="${r.rid}" data-i="${i}">−1</button>
+    </div>`).join('');
   let kids = '';
   if (r.type === 'COMPOSITE_TASK' && V) {
     // 细则多时只摊开眼前要做的：进行中的＋下一步（按顺序）或前两项；做完的、后面的收起来
@@ -448,6 +453,7 @@ function runCard(r) {
     ${mods.length ? `<div class="hint">一并执行：${mods.map(m => m.text).join('；')}</div>` : ''}
     ${own.length ? `<div class="hint alt">等下一个任务配合：${own.map(m => m.text).join('；')}</div>` : ''}
     ${timer}
+    ${counter}
     ${!f.ok && r.type !== 'MODIFIER_TASK' && r.type !== 'COMPOSITE_TASK' && !(r.game && !r.gameDone) ? `<div class="muted small">${f.why}</div>` : ''}
     <div class="row gap wrap">${btns.join('')}</div>
     ${kids}
@@ -1166,6 +1172,24 @@ const ACT = {
   game(d) { showGame(d.r); },
   hypno(d) { showHypno(d.r); },
   done(d) { finishRun(d.r); },
+  // 次数计数：没够数只改数字（不重画，免得点快了跳）；够数那一下才重画出「完成」
+  cnt(d) {
+    const i = +d.i || 0, r = E.runById(d.r), c0 = r?.count?.[i];
+    if (!c0 || c0.done >= c0.need) return;
+    const c = E.bump(d.r, 1, i);
+    if (c.done >= c.need) { vib([80, 60, 160]); toast(E.countLeft(r) ? (c.label || '这项') + '够数了' : '够数了，可以按完成'); refresh(); return; }
+    vib(15); save(true);
+    for (const n of document.querySelectorAll(`[data-cnt="${d.r}_${i}"]`)) n.textContent = c.done;
+  },
+  cntDown(d) {
+    const i = +d.i || 0, c0 = E.runById(d.r)?.count?.[i];
+    if (!c0 || !c0.done) return;
+    const full = c0.done >= c0.need;
+    const c = E.bump(d.r, -1, i);
+    if (full) { refresh(); return; }
+    save(true);
+    for (const n of document.querySelectorAll(`[data-cnt="${d.r}_${i}"]`)) n.textContent = c.done;
+  },
   pause(d) { E.pause(d.r); refresh(); },
   resume(d) { E.resume(d.r); refresh(); },
   async runMenu(d) {

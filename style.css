@@ -73,6 +73,13 @@ input.sel { width: 20px; height: 20px; margin: 0 4px 0 0; accent-color: var(--ac
 .timer { font: 600 2em/1.2 ui-monospace, monospace; margin: 6px 0 2px; color: var(--acc2); }
 .timer.soft { font-size: 1.2em; color: var(--mut); }
 .timer.due { color: var(--ok); }
+.counter { display: flex; gap: 8px; align-items: stretch; margin: 8px 0 4px; }
+.cnt-tap { flex: 1; min-height: 84px; border: 1px solid var(--acc); border-radius: 14px; background: rgba(197, 140, 240, .12); color: var(--fg, inherit); font-size: 1.1em; touch-action: manipulation; user-select: none; -webkit-tap-highlight-color: transparent; }
+.cnt-tap b { font: 700 2em/1 ui-monospace, monospace; color: var(--acc2); }
+.cnt-tap i { display: block; font-style: normal; font-size: .75em; color: var(--mut); margin-top: 4px; }
+.cnt-tap:active { background: rgba(197, 140, 240, .3); }
+.cnt-tap.full { border-color: var(--ok); }
+.cnt-tap.full b { color: var(--ok); }
 .kids { border-left: 2px solid var(--line); padding-left: 10px; margin-top: 8px; }
 .kid.done { color: var(--ok); font-size: .9em; margin: 4px 0; }
 .floatbar { position: sticky; bottom: 0; display: flex; gap: 8px; background: var(--bg); padding: 8px 0; }
