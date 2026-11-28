@@ -3,8 +3,9 @@ import * as E from './engine.js';
 import { openGame } from './minigame.js';
 import { openHypno } from './hypno.js';
 import { openReader } from './reader.js';
+import { openPlayer } from './player.js';
 
-const APP_VER = '1.3.17';
+const APP_VER = '1.3.18';
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const app = () => $('#app');
@@ -27,6 +28,8 @@ const imgUrls = new Map();
 let audIdx = {};               // 暗示语配音：aff_zh_<id>／aff_en_<id> → MIME
 let novIdx = null;             // 小说包的书目 { version, books:[{id,title,sub,chapters:[{k,no,title,han}]}] }；正文在 nov:nov_<书>_<章>
 let readerStop = null;
+let filmIdx = { films: {}, have: {} };          // 片库：{ films:{<片>: {id,title,sub,segs,dur}}, have:{<片>: [段号]} }；每段在 flm:flm_<片>_<序>
+let player = null;             // 正在放的片（openPlayer 回的控制），全屏层 #player
 const audUrls = new Map();
 let voiceEl = null, voiceSeq = 0;
 let gameStop = null;
@@ -71,6 +74,7 @@ async function loadAll() {
   const content = await Vt.getJSON('content');
   imgIdx = (await Vt.getJSON('imgidx')) || {};
   novIdx = await Vt.getJSON('novidx');
+  filmIdx = (await Vt.getJSON('filmidx')) || { films: {}, have: {} };
   audIdx = (await Vt.getJSON('audidx')) || {};
   E.useState(await Vt.getJSON('state'));
   E.hooks({ notify });
@@ -439,6 +443,7 @@ function runCard(r) {
   if (r.game && !r.gameDone) btns.push(`<button class="btn primary" data-act="game" data-r="${r.rid}">${r.type === 'METRONOME_MINIGAME_TASK' ? '打开节拍器' : '开始'}</button>`);
   const hy = r.hypno || E.hypnoOf(r);
   if (hy && E.C.hypno) btns.push(`<button class="btn primary" data-act="hypno" data-r="${r.rid}">${hy.video ? '播放催眠视频' : '播放催眠音频'}</button>`);
+  if (E.pornOf(r) && filmSegs().length) btns.push(`<button class="btn primary" data-act="pornTask" data-r="${r.rid}">播放影片</button>`);
   if (f.ok) btns.push(`<button class="btn primary" data-act="done" data-r="${r.rid}">完成</button>`);
   if (r.type === 'DURATION_TASK' || r.type === 'COMPOSITE_TASK') btns.push(r.pausedAt ? `<button class="btn" data-act="resume" data-r="${r.rid}">继续</button>` : `<button class="btn ghost" data-act="pause" data-r="${r.rid}">暂停</button>`);
   btns.push(`<button class="btn ghost" data-act="runMenu" data-r="${r.rid}">⋯</button>`);
@@ -635,7 +640,7 @@ const punTile = (e, dim) => tile(e.id, { badge: E.S.puns.some(p => p.ent === e.i
 
 function viewMore() {
   if (more === 'menu') {
-    const items = [['books', '书库'], ['clubs', '社团'], ['items', '物品与服装'], ['inf', '医务室'], ['log', '记录'], ['settings', '设置'], ['data', '备份与内容包']];
+    const items = [['books', '书库'], ['films', '片库'], ['clubs', '社团'], ['items', '物品与服装'], ['inf', '医务室'], ['log', '记录'], ['settings', '设置'], ['data', '备份与内容包']];
     return items.map(([k, l]) => `<button class="card menu" data-act="more" data-k="${k}">${l}<span>›</span></button>`).join('') +
       `<div class="card"><div class="row between"><span>程序版本 <b>${APP_VER}</b></span>${updReady
         ? `<button class="btn small primary" data-act="applyUpd">新版已下载，更新</button>`
@@ -650,6 +655,7 @@ function viewMore() {
   if (more === 'settings') return back + viewSettings();
   if (more === 'data') return back + viewData();
   if (more === 'books') return back + viewBooks();
+  if (more === 'films') return back + viewFilms();
   if (more.startsWith('book:')) return `<button class="btn ghost small" data-act="more" data-k="books">‹ 书库</button>` + viewBookToc(more.slice(5));
   return '';
 }
@@ -761,7 +767,7 @@ function viewData() {
     <p class="muted small">备份文件用你另设的口令加密。换手机或清掉浏览器资料前先备份。</p>
     <button class="btn wide primary" data-act="backup">导出备份</button>
     <h3>导入</h3>
-    <p class="muted small">同一个按钮可导入：内容包（pack.bin）、新增包（pack_add_*.bin）、图片包、小说包（novels.bin）、备份，会自动认出种类。导入是累加的，旧图会留着；新增包可一次选多个，照文件名顺序导。</p>
+    <p class="muted small">同一个按钮可导入：内容包（pack.bin）、新增包（pack_add_*.bin）、图片包、小说包（novels.bin）、备份，会自动认出种类。影片包（film_*.bin）一片一个，分几个包的要全部导入。导入是累加的，旧图会留着；新增包可一次选多个，照文件名顺序导。</p>
     <button class="btn wide" data-act="pick">选择 .bin 文件</button>
     <p class="muted small" id="impmsg"></p>
     <h3>图片</h3>
@@ -879,6 +885,7 @@ function openSheet(s) { sheets.push(s); history.pushState({ sh: sheets.length },
 window.addEventListener('popstate', () => {
   if ($('#zoom')) { $('#zoom').remove(); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); return; }
   if ($('#reader')) { closeReader(); return; }
+  if ($('#player')) { closePlayer(); return; }
   if ($('#game')) { closeGame(); return; }
   if (sheets.length) { sheets.pop(); renderSheet(); }
 });
@@ -942,6 +949,108 @@ function closeReader(viaUi = false) {
   readerStop = null;
   $('#reader')?.remove();
   if (viaUi && history.state?.reader) history.back();
+  if (screen === 'app') render();
+}
+
+// ———————————————— 片库（影片） ————————————————
+
+const segName = (id, k) => 'flm_' + id + '_' + String(k).padStart(3, '0');
+const watchOf = id => (E.S.watch = E.S.watch || {})[id] || (E.S.watch[id] = { t: 0, done: false });
+const mins = s => Math.max(1, Math.round(s / 60)) + ' 分钟';
+const filmList = () => Object.values(filmIdx?.films || {});
+// 任务用：全部已导入的段 [{id, k, dur}]
+const filmSegs = () => filmList().flatMap(f => (filmIdx.have[f.id] || []).map(k => ({ id: f.id, k, dur: f.segs[k] })));
+
+function viewFilms() {
+  const fs = filmList();
+  if (!fs.length) return `<h3>片库</h3><p class="muted">还没导入影片。在电脑上打 <b>film_*.bin</b>，到「备份与内容包」导入。</p>`;
+  return `<h3>片库</h3>` + fs.map(f => {
+    const w = watchOf(f.id), have = (filmIdx.have[f.id] || []).length, part = have < f.segs.length, mid = w.t > 5 && !w.done;
+    return `<div class="card book">
+      <div class="row between top-al"><div class="grow"><b>${esc(f.title)}</b><div class="muted small">${esc(f.sub)}・${mins(f.dur)}${part ? `・只导入了 ${have}／${f.segs.length} 段` : ''}</div></div></div>
+      <div class="bar"><i style="width:${(w.done ? 100 : w.t / f.dur * 100).toFixed(1)}%"></i></div>
+      <div class="muted small">${w.done ? '看完了' : mid ? '看到 ' + Math.floor(w.t / 60) + ' 分 ' + Math.floor(w.t % 60) + ' 秒' : '还没看'}</div>
+      <div class="row end gap" style="margin-top:8px"><button class="btn small ghost" data-act="delFilm" data-f="${f.id}">删除</button>
+        ${mid ? `<button class="btn small ghost" data-act="playFilm" data-f="${f.id}" data-k="0">从头看</button>` : ''}
+        <button class="btn small primary" data-act="playFilm" data-f="${f.id}">${mid ? '继续看' : '播放'}</button></div>
+    </div>`;
+  }).join('');
+}
+
+const filmUrls = new Map();
+async function segUrl(id, k) {
+  const key = segName(id, k);
+  if (filmUrls.has(key)) return filmUrls.get(key);
+  try {
+    const b = await Vt.getBytes('flm:' + key);
+    if (!b) return null;
+    const u = URL.createObjectURL(new Blob([b], { type: 'video/mp4' }));
+    filmUrls.set(key, u);
+    return u;
+  } catch { return null; }
+}
+function dropSeg(id, k) { const key = segName(id, k), u = filmUrls.get(key); if (u) { URL.revokeObjectURL(u); filmUrls.delete(key); } }
+
+async function playerLayer(opts) {
+  if ($('#player')) return null;
+  const p = document.createElement('div');
+  p.id = 'player';
+  document.body.appendChild(p);
+  history.pushState({ player: 1 }, '');
+  p.requestFullscreen?.().catch(() => {});
+  if (navigator.wakeLock) { try { wake = await navigator.wakeLock.request('screen'); } catch {} }
+  const s = E.S.settings;
+  player = openPlayer(p, { muted: !!s.pvMute, onMute: b => { s.pvMute = b; save(); }, onClose: () => closePlayer(true), ...opts });
+  return player;
+}
+
+function openFilm(id, fromStart) {
+  const f = filmIdx.films[id];
+  if (!f) return;
+  const w = watchOf(id);
+  playerLayer({
+    film: f, pos: fromStart || w.done ? 0 : w.t,
+    seg: k => segUrl(id, k), drop: k => dropSeg(id, k),
+    onPos: t => { if (t > 0) { w.t = t; w.done = false; } save(); },
+    onEnd: () => { w.t = 0; w.done = true; save(); }
+  });
+}
+
+// 看片任务：全部已导入的段随机接着放，只有暂停和静音；暂停＝任务暂停，时间到就关
+let pornTimer = null;
+async function openPornTask(rid) {
+  const r = E.runById(rid), all = filmSegs();
+  if (!r || !all.length) return;
+  const canPause = r.type === 'DURATION_TASK' && r.durSec;
+  const pl = await playerLayer({
+    film: { id: 'mix', title: '看片', segs: all.map(x => x.dur) },
+    shuffle: true, loop: true, bare: true,
+    seg: j => segUrl(all[j].id, all[j].k), drop: j => dropSeg(all[j].id, all[j].k),
+    onPause: () => { if (canPause) { E.pause(rid); save(); } },
+    onResume: () => { if (canPause) { E.resume(rid); save(); } }
+  });
+  if (!pl) return;
+  if (r.pausedAt && canPause) { E.resume(rid); save(); }
+  const upd = () => {
+    const run = E.runById(rid), ttl = $('#player .pv-ttl');
+    if (!run) { closePlayer(true); return; }
+    const left = E.remaining(run);
+    if (ttl && left != null) ttl.textContent = left > 0 ? '看片・剩 ' + E.fmtClock(left) + (run.pausedAt ? '（暂停）' : '') : '看片・时间到';
+    if (left != null && left <= 0 && run.type === 'DURATION_TASK') { closePlayer(true); toast('时间到，可以按「完成」了'); }
+  };
+  upd();
+  pornTimer = setInterval(upd, 1000);
+}
+
+function closePlayer(viaUi = false) {
+  clearInterval(pornTimer); pornTimer = null;
+  if (player) player.stop();
+  player = null;
+  if (!$('#player')) return;
+  $('#player').remove();
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  if (wake) { wake.release().catch(() => {}); wake = null; }
+  if (viaUi && history.state?.player) history.back();
   if (screen === 'app') render();
 }
 
@@ -1102,6 +1211,15 @@ const ACT = {
   tab(d) { tab = d.k; if (tab !== 'more') more = 'menu'; sel.clear(); render(); },
   more(d) { more = d.k; render(); },
   readBook(d) { openBook(d.b, d.k); },
+  playFilm(d) { openFilm(d.f, !!d.k); },
+  pornTask(d) { openPornTask(d.r); },
+  async delFilm(d) {
+    const f = filmIdx.films[d.f];
+    if (!f || !(await confirmBox(`从手机删掉「${esc(f.title)}」？进度会留着，之后可以再导入。`, '删除', 'danger'))) return;
+    for (const k of filmIdx.have[d.f] || []) await Vt.blobDelete('flm:' + segName(d.f, k));
+    delete filmIdx.films[d.f]; delete filmIdx.have[d.f];
+    await Vt.putJSON('filmidx', filmIdx); render();
+  },
   checkUpd() { checkUpdate(); },
   applyUpd() { applyUpdate(); },
   cf(d) { classFilter = d.k; render(); },
@@ -1351,6 +1469,23 @@ async function importOne(file, pass, msg) {
     if (na) await Vt.putJSON('audidx', audIdx);
     dropImageUrls();
     toast(h.kind === 'pack' ? `内容包已导入（${h.data.entities.length} 项，图片／视频 ${ni}，语音 ${na}）` : `图片已导入 ${ni} 张`);
+  } else if (h.kind === 'film') {
+    // 影片包：一片可能分几个包，导入累加；同一片重导就覆盖同号的段
+    const f = h.film, have = new Set(filmIdx.have[f.id] || []);
+    if (filmIdx.films[f.id] && JSON.stringify(filmIdx.films[f.id].segs) !== JSON.stringify(f.segs)) {  // 片子重剪过：旧段作废
+      for (const k of have) await Vt.blobDelete('flm:' + segName(f.id, k));
+      have.clear();
+    }
+    let n = 0;
+    for (const x of res.files) {
+      msg(`存影片 ${++n}／${res.files.length}…`);
+      await Vt.putBytes('flm:' + x.name, x.bytes);
+      have.add(parseInt(x.name.split('_').pop(), 10));
+    }
+    filmIdx.films[f.id] = f; filmIdx.have[f.id] = [...have].sort((a, b) => a - b);
+    await Vt.putJSON('filmidx', filmIdx);
+    const left = f.segs.length - have.size;
+    toast(`影片已导入：${f.title}（第 ${h.part}／${h.parts} 包）` + (left ? `，还差 ${left} 段，请导入其余的包` : ''), 4000);
   } else if (h.kind === 'novels') {
     // 小说包：整套覆盖（书目＋每章正文）；读到哪里存在进度里，不受影响
     let n = 0;
@@ -1367,6 +1502,7 @@ async function importOne(file, pass, msg) {
 
 function doLock() {
   closeReader();
+  closePlayer();
   save(true);
   closeGame();
   sheets = []; sel.clear();
@@ -1435,6 +1571,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     hiddenAt = Date.now();
     document.body.classList.add('veil');
+    if (player) player.pause();
     save(true);
   } else {
     document.body.classList.remove('veil');

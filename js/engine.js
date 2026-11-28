@@ -772,6 +772,12 @@ export function hypnoOf(run, sec) {
   };
 }
 
+// 看片任务（计时／限时任务文字提到色情片、色情内容、看片）：可在 App 里放片库的随机片段
+export function pornOf(run) {
+  if (run.type !== 'DURATION_TASK' && run.type !== 'TIMED_TASK') return false;
+  return /色情|看片/.test(run.text || '');
+}
+
 export function remaining(run, now = Date.now()) {
   const paused = run.pausedTotal + (run.pausedAt ? now - run.pausedAt : 0);
   const el = (now - run.startedAt - paused) / 1000;
